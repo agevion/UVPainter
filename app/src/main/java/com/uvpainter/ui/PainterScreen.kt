@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.CenterFocusStrong
@@ -69,6 +68,7 @@ import com.uvpainter.state.PainterController
 import com.uvpainter.state.PenButtonAction
 import com.uvpainter.state.Tool
 import com.uvpainter.ui.components.ColorSwatch
+import com.uvpainter.ui.components.UvpIcons
 import com.uvpainter.ui.components.VerticalSlider
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -318,7 +318,7 @@ private fun BoxScope.TopToolbar(
             controller.changeTool(Tool.BRUSH)
             onPanelToggle(OpenPanel.BRUSH)
         }
-        ToolIcon(Icons.Filled.AutoFixNormal, "Borrador", selected = controller.tool == Tool.ERASER) {
+        ToolIcon(UvpIcons.Eraser, "Borrador", selected = controller.tool == Tool.ERASER) {
             controller.changeTool(Tool.ERASER)
         }
         ToolIcon(Icons.Filled.FormatColorFill, "Bote", selected = controller.tool == Tool.FILL) {
