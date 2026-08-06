@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.Fullscreen
@@ -72,7 +73,7 @@ import com.uvpainter.ui.components.VerticalSlider
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private enum class OpenPanel { NONE, BRUSH, COLOR, LAYERS, VIEW, INPUT, SHAPE, DOCUMENT }
+private enum class OpenPanel { NONE, BRUSH, COLOR, LAYERS, VIEW, INPUT, SHAPE, DOCUMENT, PROJECTS }
 
 @Composable
 fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
@@ -175,6 +176,8 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
                 },
             )
         }
+
+        if (controller.showFps) FpsOverlay(controller)
 
         StatusBar(controller)
 
@@ -356,6 +359,9 @@ private fun BoxScope.TopToolbar(
             onPanelToggle(OpenPanel.INPUT)
         }
         ToolIcon(Icons.Filled.CenterFocusStrong, "Encuadrar") { controller.resetView() }
+        ToolIcon(Icons.Filled.Folder, "Proyectos", selected = openPanel == OpenPanel.PROJECTS) {
+            onPanelToggle(OpenPanel.PROJECTS)
+        }
         ToolIcon(Icons.Filled.Settings, "Documento", selected = openPanel == OpenPanel.DOCUMENT) {
             onPanelToggle(OpenPanel.DOCUMENT)
         }
@@ -425,6 +431,7 @@ private fun BoxScope.PanelHost(
                     controller, onImportModel, onImportImage,
                     onPickReference = onPickReference,
                 )
+            OpenPanel.PROJECTS -> ProjectsPanel(controller)
             OpenPanel.NONE -> Unit
         }
     }
@@ -433,6 +440,30 @@ private fun BoxScope.PanelHost(
 // ---------------------------------------------------------------------------
 // Mensajes
 // ---------------------------------------------------------------------------
+/**
+ * Contador de fotogramas, arriba a la izquierda. Se enciende desde el panel de
+ * vista y solo entonces se mide: con el apagado, el hilo de render ni cuenta.
+ */
+@Composable
+private fun BoxScope.FpsOverlay(controller: PainterController) {
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(start = 10.dp, top = 10.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x99101218))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Text(
+            "${controller.fps.roundToInt()} FPS",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            // Verde mientras va fino, ambar en cuanto cae por debajo de 30.
+            color = if (controller.fps >= 30f) Color(0xFF8BE28B) else Color(0xFFE2A98B),
+        )
+    }
+}
+
 @Composable
 private fun BoxScope.StatusBar(controller: PainterController) {
     val message = controller.statusMessage
