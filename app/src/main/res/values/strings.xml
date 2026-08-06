@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UVPainter</string>
+
+    <string name="action_undo">Deshacer</string>
+    <string name="action_redo">Rehacer</string>
+    <string name="action_import_model">Importar modelo</string>
+    <string name="action_export_texture">Exportar textura</string>
+
+    <string name="brush_size">Tamaño</string>
+    <string name="brush_opacity">Opacidad</string>
+    <string name="brush_hardness">Dureza</string>
+    <string name="brush_flow">Flujo</string>
+
+    <string name="view_mode">Vista</string>
+    <string name="view_unlit">Plano</string>
+    <string name="view_pbr">PBR</string>
+    <string name="view_matcap">Matcap</string>
+    <string name="view_wireframe">Malla</string>
+    <string name="view_uv_checker">Cuadrícula UV</string>
+
+    <string name="panel_layers">Capas</string>
+    <string name="panel_color">Color</string>
+    <string name="panel_brush">Pincel</string>
+</resources>
