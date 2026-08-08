@@ -633,7 +633,19 @@ bool Engine::drawFrame() {
         }
         const Vec4 color = paintMode_ == PaintMode::Erase ? Vec4(1.0f, 0.45f, 0.4f, 0.85f)
                                                           : Vec4(1.0f, 1.0f, 1.0f, 0.75f);
-        renderer_.drawBrushCursor(viewportW_, viewportH_, hoverPos_, radius, brush_.hardness,
+
+        // Con el regulador activo el pincel va colgando por detras de la punta,
+        // asi que el anillo tiene que ir donde cae la pintura y no donde esta el
+        // lapiz. La cuerda entre los dos es lo que explica ese retraso; sin
+        // dibujarla, el trazo parece que responde mal.
+        Vec2 cursorAt = hoverPos_;
+        const float rope = paintEngine_.ropeLength();
+        if (rope > 0.0f) {
+            cursorAt = paintEngine_.paintPosition();
+            renderer_.drawRope(viewportW_, viewportH_, cursorAt, hoverPos_,
+                               Vec4(color.x, color.y, color.z, 0.55f));
+        }
+        renderer_.drawBrushCursor(viewportW_, viewportH_, cursorAt, radius, brush_.hardness,
                                   color);
     }
 

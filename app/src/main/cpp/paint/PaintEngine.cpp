@@ -45,6 +45,10 @@ void PaintEngine::shutdown() {
     baseSnapshot_.destroy();
     reducePyramid_.clear();
     sceneDepth_.destroy();
+    // Estas dos faltaban: al perder el contexto hay que soltar todo lo que vive
+    // en GPU mientras el contexto sigue vivo, no dejarlo al destructor.
+    sceneIsland_.destroy();
+    sceneAtlasUv_.destroy();
     depthBuffer_.destroy();
     depthFbo_.destroy();
     paintFbo_.destroy();
@@ -103,14 +107,17 @@ void PaintEngine::resizeViewport(int width, int height) {
     viewportH_ = h;
     sceneDepth_.create(viewportW_, viewportH_, GL_RGBA8, GL_NEAREST);
     sceneIsland_.create(viewportW_, viewportH_, GL_RGBA8, GL_NEAREST);
+    sceneAtlasUv_.create(viewportW_, viewportH_, GL_RGBA8, GL_NEAREST);
     depthBuffer_.create(viewportW_, viewportH_, GL_DEPTH_COMPONENT24, GL_NEAREST);
 
     depthFbo_.bind();
     depthFbo_.attachColor(sceneDepth_, 0);
     depthFbo_.attachColor(sceneIsland_, 1);
+    depthFbo_.attachColor(sceneAtlasUv_, 2);
     depthFbo_.attachDepth(depthBuffer_);
-    const GLenum buffers[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(2, buffers);
+    const GLenum buffers[3] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                               GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, buffers);
     if (!depthFbo_.isComplete()) LOGE("FBO del prepaso de profundidad incompleto");
     Framebuffer::unbind();
 }
@@ -374,7 +381,8 @@ void PaintEngine::flush(const Camera& camera) {
     if (needsPrepass) renderDepthPrepass(camera);
 
     if (pendingIslandPick_) {
-        readSurfaceIdsAt(islandPickPoint_, activeIslandId_, activeRegionId_);
+        Vec2 ignoredUv;
+        readSurfaceIdsAt(islandPickPoint_, activeIslandId_, activeRegionId_, ignoredUv);
         pendingIslandPick_ = false;
     }
 
@@ -446,8 +454,10 @@ void PaintEngine::renderDepthPrepass(const Camera& camera) {
     // significa "plano lejano", y cero en islas significa "sin geometria".
     const float farColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     const float noIsland[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    const float noUv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     glClearBufferfv(GL_COLOR, 0, farColor);
     glClearBufferfv(GL_COLOR, 1, noIsland);
+    glClearBufferfv(GL_COLOR, 2, noUv);
     glClearDepthf(1.0f);
     glClear(GL_DEPTH_BUFFER_BIT);
 
@@ -467,9 +477,10 @@ void PaintEngine::renderDepthPrepass(const Camera& camera) {
     GL_CHECK("PaintEngine::renderDepthPrepass");
 }
 
-bool PaintEngine::readSurfaceIdsAt(Vec2 screenPoint, int& island, int& region) {
+bool PaintEngine::readSurfaceIdsAt(Vec2 screenPoint, int& island, int& region, Vec2& atlasUv) {
     island = -1;
     region = -1;
+    atlasUv = {0.0f, 0.0f};
     if (!sceneIsland_.valid()) return false;
 
     const int x = static_cast<int>(clampf(screenPoint.x, 0.0f,
@@ -480,12 +491,25 @@ bool PaintEngine::readSurfaceIdsAt(Vec2 screenPoint, int& island, int& region) {
                                           static_cast<float>(viewportH_ - 1)));
 
     depthFbo_.bind();
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadBuffer(GL_COLOR_ATTACHMENT1);
     uint8_t px[4] = {0, 0, 0, 0};
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+
+    // Segunda lectura, de un pixel tambien: la coordenada del atlas bajo la
+    // punta. Sale gratis del mismo prepaso y es donde arranca el relleno.
+    glReadBuffer(GL_COLOR_ATTACHMENT2);
+    uint8_t uv[4] = {0, 0, 0, 0};
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, uv);
+
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     Framebuffer::unbind();
+
+    // 16 bits por coordenada, tal y como los empaqueto kDepthFS.
+    atlasUv = {
+        (static_cast<float>(uv[0]) + static_cast<float>(uv[1]) / 255.0f) / 255.0f,
+        (static_cast<float>(uv[2]) + static_cast<float>(uv[3]) / 255.0f) / 255.0f,
+    };
 
     const int islandCode = static_cast<int>(px[0]) + static_cast<int>(px[1]) * 256;
     const int regionCode = static_cast<int>(px[2]) + static_cast<int>(px[3]) * 256;
@@ -682,9 +706,26 @@ void PaintEngine::performFill(const Camera& camera) {
 
     if (brush_.restrictToRegion) doc_->ensureRegions();
     renderDepthPrepass(camera);
-    readSurfaceIdsAt(fillPoint_, activeIslandId_, activeRegionId_);
+    Vec2 seedUv{0.0f, 0.0f};
+    readSurfaceIdsAt(fillPoint_, activeIslandId_, activeRegionId_, seedUv);
     if (activeIslandId_ < 0) {
         // El toque cayo fuera del modelo: no se rellena nada.
+        return;
+    }
+
+    // Relleno por area cerrada: no se dibuja nada con el shader, la mascara se
+    // calcula en CPU recorriendo el atlas desde el texel tocado.
+    if (brush_.fillClosedArea) {
+        if (!fillClosedArea(seedUv)) {
+            LOGW("El relleno por area no pudo arrancar en (%.4f, %.4f)", seedUv.x, seedUv.y);
+            return;
+        }
+        predictedDrawnLastFrame_ = false;
+        compositeStroke();
+        doc_->dilate(layer->texture, 2);
+        doc_->markDirty();
+        pushStrokePatch();
+        GL_CHECK("PaintEngine::performFill(area)");
         return;
     }
 
@@ -722,6 +763,83 @@ void PaintEngine::performFill(const Camera& camera) {
     doc_->markDirty();
     pushStrokePatch();
     GL_CHECK("PaintEngine::performFill");
+}
+
+/// Relleno por area cerrada, al modo de un editor de fotos.
+///
+/// Se extiende desde el texel tocado y se para donde el color deja de
+/// parecerse, sin mirar islas ni paredes dibujadas a mano: eso es justo lo que
+/// hace falta para rellenar una figura trazada a pulso, que no tiene mas
+/// frontera que su propio contorno.
+///
+/// Se compara contra la COMPOSICION y no contra la capa activa, para que un
+/// contorno dibujado en otra capa siga frenando el relleno: si se ve, corta.
+bool PaintEngine::fillClosedArea(Vec2 seedUv) {
+    const int res = docResolution_;
+    if (res <= 0) return false;
+
+    std::vector<uint8_t> canvas;
+    if (!doc_->readComposite(canvas, false, 0)) return false;
+
+    // La mascara de UV evita que el relleno se escape por el hueco vacio del
+    // atlas y aparezca en una isla que solo esta al lado por casualidad.
+    std::vector<uint8_t> uvMask;
+    const bool hasMask = doc_->readRegion(doc_->uvMask(), 0, 0, res, res, uvMask);
+
+    const size_t texels = static_cast<size_t>(res) * static_cast<size_t>(res);
+    if (canvas.size() < texels * 4u) return false;
+
+    const int sx = static_cast<int>(clampf(seedUv.x * static_cast<float>(res), 0.0f,
+                                           static_cast<float>(res - 1)));
+    const int sy = static_cast<int>(clampf(seedUv.y * static_cast<float>(res), 0.0f,
+                                           static_cast<float>(res - 1)));
+    const size_t seed = static_cast<size_t>(sy) * static_cast<size_t>(res) + sx;
+
+    const int r0 = canvas[seed * 4u + 0];
+    const int g0 = canvas[seed * 4u + 1];
+    const int b0 = canvas[seed * 4u + 2];
+    const int a0 = canvas[seed * 4u + 3];
+    const int tol = static_cast<int>(clampf(brush_.fillTolerance, 0.0f, 1.0f) * 255.0f);
+
+    std::vector<uint8_t> out(texels, 0u);
+
+    auto matches = [&](size_t i) {
+        if (hasMask && uvMask[i * 4u] < 128u) return false;
+        const uint8_t* c = &canvas[i * 4u];
+        return std::abs(static_cast<int>(c[0]) - r0) <= tol &&
+               std::abs(static_cast<int>(c[1]) - g0) <= tol &&
+               std::abs(static_cast<int>(c[2]) - b0) <= tol &&
+               std::abs(static_cast<int>(c[3]) - a0) <= tol;
+    };
+
+    if (!matches(seed)) return false;
+
+    // Pila explicita: una version recursiva desborda la pila del hilo en cuanto
+    // el area pasa de unos miles de texels, y aqui pueden ser millones.
+    std::vector<uint32_t> pending;
+    pending.reserve(4096);
+    out[seed] = 255u;
+    pending.push_back(static_cast<uint32_t>(seed));
+
+    while (!pending.empty()) {
+        const uint32_t index = pending.back();
+        pending.pop_back();
+        const int x = static_cast<int>(index % static_cast<uint32_t>(res));
+        const int y = static_cast<int>(index / static_cast<uint32_t>(res));
+
+        const int nx[4] = {x - 1, x + 1, x, x};
+        const int ny[4] = {y, y, y - 1, y + 1};
+        for (int k = 0; k < 4; ++k) {
+            if (nx[k] < 0 || nx[k] >= res || ny[k] < 0 || ny[k] >= res) continue;
+            const size_t n = static_cast<size_t>(ny[k]) * static_cast<size_t>(res) + nx[k];
+            if (out[n] != 0u || !matches(n)) continue;
+            out[n] = 255u;
+            pending.push_back(static_cast<uint32_t>(n));
+        }
+    }
+
+    strokeMask_.upload(out.data(), GL_RED);
+    return true;
 }
 
 void PaintEngine::compositeStroke() {

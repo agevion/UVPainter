@@ -30,6 +30,7 @@ object NativeBridge {
     const val FLAG_TIP_FOLLOWS_STROKE = 1 shl 7
     const val FLAG_SHAPE_FROM_CENTER = 1 shl 8
     const val FLAG_LOCK_SIZE_TO_SURFACE = 1 shl 9
+    const val FLAG_FILL_CLOSED_AREA = 1 shl 10
 
     // Índices del array de floats de [nativeSetBrush]. Van como array y no como
     // parámetros sueltos para que añadir un ajuste no cambie la firma JNI.
@@ -54,7 +55,8 @@ object NativeBridge {
     const val B_TIP_ANGLE = 18
     const val B_GRAIN_AMOUNT = 19
     const val B_GRAIN_SCALE = 20
-    const val B_FLOAT_COUNT = 21
+    const val B_FILL_TOLERANCE = 21
+    const val B_FLOAT_COUNT = 22
 
     // Índices del array de enteros.
     const val B_FLAGS = 0

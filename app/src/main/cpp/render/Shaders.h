@@ -94,9 +94,10 @@ void main() {
 }
 )";
 
-// Dos adjuntos: profundidad lineal empaquetada y el identificador de isla UV.
-// El segundo permite saber, con una lectura de un solo pixel, sobre que isla
-// esta el lapiz al empezar el trazo.
+// Tres adjuntos: profundidad lineal empaquetada, el identificador de isla UV y
+// la coordenada del atlas. Con una lectura de un solo pixel el motor sabe sobre
+// que isla se apoyo el lapiz y, ademas, en que texel exacto del atlas cae: de
+// ahi arranca el relleno por area cerrada.
 inline constexpr const char* kDepthFS = R"(#version 300 es
 precision highp float;
 in float vViewZ;
@@ -107,6 +108,7 @@ uniform sampler2D uRegionMap;
 uniform bool uHasRegions;
 layout(location = 0) out vec4 fragDepth;
 layout(location = 1) out vec4 fragIds;
+layout(location = 2) out vec4 fragAtlasUv;
 
 vec4 packDepth(float v) {
     vec4 enc = vec4(1.0, 255.0, 65025.0, 16581375.0) * v;
@@ -115,8 +117,18 @@ vec4 packDepth(float v) {
     return enc;
 }
 
+// 16 bits por coordenada. Con 8 el error seria de varios texels del atlas y el
+// relleno arrancaria en el texel de al lado, que puede estar al otro lado del
+// contorno que se pretende rellenar.
+vec2 packUnit(float v) {
+    float scaled = clamp(v, 0.0, 1.0) * 255.0;
+    float hi = floor(scaled);
+    return vec2(hi / 255.0, scaled - hi);
+}
+
 void main() {
     fragDepth = packDepth(clamp(vViewZ / uFar, 0.0, 1.0));
+    fragAtlasUv = vec4(packUnit(vAtlasUv.x), packUnit(vAtlasUv.y));
 
     // Se empaquetan isla (RG) y region (BA) en un mismo adjunto: con una sola
     // lectura de un pixel el motor sabe, al empezar el trazo, en que isla y en
@@ -716,6 +728,49 @@ void main() {
     }
 
     float alpha = max(ring, innerRing) * uColor.a;
+    if (alpha <= 0.002) discard;
+    fragColor = vec4(uColor.rgb, alpha);
+}
+)";
+
+// ---------------------------------------------------------------------------
+// Cuerda del regulador de trazo.
+//
+// El regulador funciona como si del lapiz colgara una cuerda de longitud fija y
+// el pincel fuera el peso del otro extremo: el pincel solo se mueve cuando la
+// cuerda se tensa, y por eso el temblor por debajo de esa longitud se descarta
+// entero. Dibujarla no es adorno: sin verla no se entiende por que el trazo
+// sale con retraso respecto a la punta.
+// ---------------------------------------------------------------------------
+inline constexpr const char* kRopeFS = R"(#version 300 es
+precision highp float;
+in vec2 vUv;
+layout(location = 0) out vec4 fragColor;
+
+uniform vec2 uViewportSize;
+uniform vec2 uAnchor;   // px, donde cae la pintura
+uniform vec2 uTip;      // px, la punta del lapiz
+uniform vec4 uColor;
+
+void main() {
+    vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uViewportSize;
+
+    // Distancia al segmento anclaje-punta.
+    vec2 ba = uTip - uAnchor;
+    vec2 pa = p - uAnchor;
+    float len2 = max(dot(ba, ba), 1e-4);
+    float t = clamp(dot(pa, ba) / len2, 0.0, 1.0);
+    float line = length(pa - ba * t);
+
+    // La cuerda se dibuja fina y con la punta un poco mas marcada, para que se
+    // lea sobre cualquier fondo sin tapar lo que hay debajo.
+    float rope = 1.0 - smoothstep(0.6, 1.8, line);
+
+    float dTip = length(p - uTip);
+    float ring = clamp((1.0 - smoothstep(3.2, 4.4, dTip)) -
+                       (1.0 - smoothstep(2.0, 3.0, dTip)), 0.0, 1.0);
+
+    float alpha = max(rope * 0.65, ring) * uColor.a;
     if (alpha <= 0.002) discard;
     fragColor = vec4(uColor.rgb, alpha);
 }

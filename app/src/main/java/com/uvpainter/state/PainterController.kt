@@ -748,6 +748,7 @@ class PainterController(private val appContext: Context) {
         if (brush.tipFollowsStroke) flags = flags or NativeBridge.FLAG_TIP_FOLLOWS_STROKE
         if (brush.shapeFromCenter) flags = flags or NativeBridge.FLAG_SHAPE_FROM_CENTER
         if (brush.lockSizeToSurface) flags = flags or NativeBridge.FLAG_LOCK_SIZE_TO_SURFACE
+        if (brush.fillClosedArea) flags = flags or NativeBridge.FLAG_FILL_CLOSED_AREA
 
         val values = FloatArray(NativeBridge.B_FLOAT_COUNT)
         values[NativeBridge.B_RADIUS] = brush.radiusPx
@@ -771,6 +772,7 @@ class PainterController(private val appContext: Context) {
         values[NativeBridge.B_TIP_ANGLE] = brush.tipAngle
         values[NativeBridge.B_GRAIN_AMOUNT] = brush.grainAmount
         values[NativeBridge.B_GRAIN_SCALE] = brush.grainScale
+        values[NativeBridge.B_FILL_TOLERANCE] = brush.fillTolerance
 
         val options = IntArray(NativeBridge.B_INT_COUNT)
         options[NativeBridge.B_FLAGS] = flags

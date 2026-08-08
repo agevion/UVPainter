@@ -67,6 +67,13 @@ struct BrushSettings {
     /// mantiene el mismo tamano sobre la superficie y solo crece en pantalla,
     /// que es justo lo que hace falta para pintar detalle fino de cerca.
     bool lockSizeToSurface = false;
+    /// El bote deja de rellenar la isla UV entera y se para donde el color
+    /// cambia, como en un editor de fotos: sirve para rellenar una figura
+    /// dibujada a pulso sin tener que delimitarla antes con una pared.
+    bool fillClosedArea = false;
+    /// Cuanto puede alejarse un texel del color donde se toco y seguir
+    /// contando como "el mismo color". 0 = identico, 1 = todo vale.
+    float fillTolerance = 0.12f;
     float hardness = 0.55f;
     float opacity = 1.0f;   // alfa maximo del trazo entero
     float flow = 1.0f;      // cuanto aporta cada pasada

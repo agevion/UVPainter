@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.FormatColorFill
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Layers
@@ -221,6 +222,18 @@ private fun BoxScope.LeftRail(controller: PainterController) {
             valueRange = 0f..1f,
             onValueChange = { value -> controller.updateBrush { it.copy(opacity = value) } },
         )
+        // La longitud de cuerda solo aparece con el regulador encendido: ocupa
+        // sitio y no significa nada mientras esta apagado.
+        if (controller.brush.stabilizerRadiusPx > 0.5f) {
+            Spacer(modifier = Modifier.height(14.dp))
+            RailSlider(
+                caption = "REG",
+                readout = "${controller.brush.stabilizerRadiusPx.roundToInt()}",
+                value = controller.brush.stabilizerRadiusPx,
+                valueRange = 4f..120f,
+                onValueChange = { value -> controller.setStabilizerRadius(value) },
+            )
+        }
     }
 }
 
@@ -323,9 +336,19 @@ private fun BoxScope.TopToolbar(
         }
         ToolIcon(Icons.Filled.FormatColorFill, "Bote", selected = controller.tool == Tool.FILL) {
             controller.changeTool(Tool.FILL)
+            onPanelToggle(OpenPanel.BRUSH)
         }
         ToolIcon(Icons.Filled.Colorize, "Cuentagotas", selected = controller.tool == Tool.PICKER) {
             controller.changeTool(Tool.PICKER)
+        }
+        // El regulador se enciende y se apaga a media lamina, asi que vive en la
+        // barra y no dentro de un panel.
+        ToolIcon(
+            Icons.Filled.Gesture,
+            "Regular trazo",
+            selected = controller.brush.stabilizerRadiusPx > 0.5f,
+        ) {
+            controller.setStabilizerEnabled(controller.brush.stabilizerRadiusPx <= 0.5f)
         }
         ToolIcon(
             Icons.Filled.Category,

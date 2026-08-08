@@ -15,6 +15,7 @@ bool ViewportRenderer::initialize() {
     ok &= modelShader_.compile(shaders::kModelVS, shaders::kModelFS, "model");
     ok &= wireframeShader_.compile(shaders::kModelVS, shaders::kWireframeFS, "wireframe");
     ok &= cursorShader_.compile(shaders::kFullscreenVS, shaders::kBrushCursorFS, "brushCursor");
+    ok &= ropeShader_.compile(shaders::kFullscreenVS, shaders::kRopeFS, "stabilizerRope");
     if (!ok) LOGE("ViewportRenderer: fallo compilando shaders");
     ready_ = ok;
     return ok;
@@ -25,6 +26,7 @@ void ViewportRenderer::shutdown() {
     modelShader_.destroy();
     wireframeShader_.destroy();
     cursorShader_.destroy();
+    ropeShader_.destroy();
     ready_ = false;
 }
 
@@ -152,6 +154,32 @@ void ViewportRenderer::drawBrushCursor(int width, int height, Vec2 centerPx, flo
 
     glDisable(GL_BLEND);
     GL_CHECK("ViewportRenderer::drawBrushCursor");
+}
+
+void ViewportRenderer::drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx, Vec4 color) {
+    if (!ready_) return;
+    // Con la cuerda destensada los dos extremos coinciden y no hay nada que
+    // dibujar; pintar un segmento de longitud cero solo mete un punto raro.
+    if (length(tipPx - anchorPx) < 1.5f) return;
+
+    Framebuffer::unbind();
+    glViewport(0, 0, width, height);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    ropeShader_.bind();
+    ropeShader_.set("uViewportSize",
+                    Vec2(static_cast<float>(width), static_cast<float>(height)));
+    ropeShader_.set("uAnchor", anchorPx);
+    ropeShader_.set("uTip", tipPx);
+    ropeShader_.set("uColor", color);
+    drawFullscreenTriangle();
+
+    glDisable(GL_BLEND);
+    GL_CHECK("ViewportRenderer::drawRope");
 }
 
 }  // namespace uvp

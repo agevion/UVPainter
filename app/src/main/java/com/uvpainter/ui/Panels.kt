@@ -253,6 +253,39 @@ fun BrushPanel(controller: PainterController, modifier: Modifier = Modifier) {
                 { controller.updateBrush { b -> b.copy(facingFull = it) } },
                 valueRange = 0.05f..0.9f,
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0x22FFFFFF))
+            PanelTitle("Bote de pintura")
+
+            SmallToggleRow("Rellenar solo el área cerrada", brush.fillClosedArea) { value ->
+                controller.updateBrush { b -> b.copy(fillClosedArea = value) }
+            }
+            Text(
+                if (brush.fillClosedArea) {
+                    "El bote se extiende desde donde tocas y se para donde cambia " +
+                        "el color, como en un editor de fotos. Sirve para rellenar " +
+                        "una figura dibujada a pulso, sin tener que delimitarla antes."
+                } else {
+                    "El bote llena la isla UV entera bajo el dedo."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (brush.fillClosedArea) {
+                LabeledSlider(
+                    "Tolerancia", brush.fillTolerance,
+                    { controller.updateBrush { b -> b.copy(fillTolerance = it) } },
+                    valueRange = 0f..0.6f,
+                    format = { "${(it * 100).roundToInt()}%" },
+                )
+                Text(
+                    "Cuánto puede variar el color y seguir contando como la misma " +
+                        "zona. Si el relleno se escapa por un hueco del contorno, " +
+                        "baja esto; si se queda corto contra un borde suavizado, súbelo.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

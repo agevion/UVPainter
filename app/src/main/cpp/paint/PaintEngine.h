@@ -40,6 +40,15 @@ public:
     void endStroke();
     bool strokeActive() const { return strokeActive_; }
 
+    /// Donde esta cayendo la pintura de verdad. Con el regulador activo esto va
+    /// por detras de la punta del lapiz: es el extremo de la cuerda.
+    Vec2 paintPosition() const { return smoothed_; }
+    /// Longitud de cuerda del trazo en curso, o 0 si el regulador esta apagado.
+    float ropeLength() const {
+        return strokeActive_ && brush_.stabilizerRadiusPx > 0.5f ? brush_.stabilizerRadiusPx
+                                                                 : 0.0f;
+    }
+
     /// Bote de pintura: rellena por completo la isla UV bajo el punto dado.
     void requestFill(Vec2 screenPoint, const BrushSettings& brush);
 
@@ -73,11 +82,17 @@ private:
     void renderDepthPrepass(const Camera& camera);
     /// Lee isla y region bajo el punto, tal como los dejo el prepaso.
     /// Devuelve false si el lapiz no estaba sobre la malla.
-    bool readSurfaceIdsAt(Vec2 screenPoint, int& island, int& region);
+    /// Lee isla, region y coordenada del atlas bajo el punto, tal como los dejo
+    /// el prepaso. Devuelve false si el lapiz no estaba sobre la malla.
+    bool readSurfaceIdsAt(Vec2 screenPoint, int& island, int& region, Vec2& atlasUv);
     std::vector<Segment> buildShapeSegments() const;
     void drawSegments(const Camera& camera, const std::vector<Segment>& segments,
                       Texture2D& target, bool clearFirst, bool applyRestrictions);
     void performFill(const Camera& camera);
+    /// Rellena desde `seedUv` hacia fuera hasta que el color deja de parecerse.
+    /// Deja el resultado en la mascara del trazo. false si no se pudo leer el
+    /// lienzo o si el punto caia fuera de la malla.
+    bool fillClosedArea(Vec2 seedUv);
     void beginLayerEdit();
     void compositeStroke();
     bool computeStrokeBounds(int& x, int& y, int& w, int& h);
@@ -103,6 +118,9 @@ private:
     // RGBA8; depthBuffer_ es solo el z-buffer que ordena el prepaso.
     Texture2D sceneDepth_;
     Texture2D sceneIsland_;
+    /// UV del atlas por pixel de pantalla. De aqui sale el texel donde arranca
+    /// el relleno por area cerrada.
+    Texture2D sceneAtlasUv_;
     Texture2D depthBuffer_;
     Framebuffer depthFbo_;
 

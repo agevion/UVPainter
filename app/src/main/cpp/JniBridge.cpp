@@ -38,6 +38,7 @@ constexpr int kFlagRestrictRegion = 1 << 6;
 constexpr int kFlagTipFollowsStroke = 1 << 7;
 constexpr int kFlagShapeFromCenter = 1 << 8;
 constexpr int kFlagLockSizeToSurface = 1 << 9;
+constexpr int kFlagFillClosedArea = 1 << 10;
 
 }  // namespace
 
@@ -366,6 +367,7 @@ JNIEXPORT void JNICALL Java_com_uvpainter_engine_NativeBridge_nativeSetBrush(
     brush.tipAngle = f[18];
     brush.grainAmount = f[19];
     brush.grainScale = f[20];
+    brush.fillTolerance = f[21];
 
     brush.tipShape = static_cast<uvp::TipShape>(i[1]);
     brush.shape = static_cast<uvp::ShapeKind>(i[2]);
@@ -381,6 +383,7 @@ JNIEXPORT void JNICALL Java_com_uvpainter_engine_NativeBridge_nativeSetBrush(
     brush.tipFollowsStroke = (flags & kFlagTipFollowsStroke) != 0;
     brush.shapeFromCenter = (flags & kFlagShapeFromCenter) != 0;
     brush.lockSizeToSurface = (flags & kFlagLockSizeToSurface) != 0;
+    brush.fillClosedArea = (flags & kFlagFillClosedArea) != 0;
 
     env->ReleaseFloatArrayElements(values, f, JNI_ABORT);
     env->ReleaseIntArrayElements(options, i, JNI_ABORT);

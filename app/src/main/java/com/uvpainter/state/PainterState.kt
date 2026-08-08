@@ -115,6 +115,12 @@ data class BrushState(
     val grainAmount: Float = 0f,
     val grainScale: Float = 700f,
 
+    // Bote de pintura
+    /** Se para donde cambia el color en vez de llenar la isla UV entera. */
+    val fillClosedArea: Boolean = false,
+    /** Cuánto puede variar el color y seguir contando como la misma zona. */
+    val fillTolerance: Float = 0.12f,
+
     // Formas geométricas
     val shape: ShapeKind = ShapeKind.NONE,
     val polygonSides: Int = 6,

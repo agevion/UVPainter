@@ -47,6 +47,8 @@ public:
                      const Texture2D& baseColor, const Texture2D* boundaryMask,
                      const ViewportSettings& settings);
 
+    /// Cuerda del regulador: une donde cae la pintura con la punta del lapiz.
+    void drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx, Vec4 color);
     void drawBrushCursor(int width, int height, Vec2 centerPx, float radiusPx, float hardness,
                          Vec4 color);
 
@@ -55,6 +57,7 @@ private:
     Shader modelShader_;
     Shader wireframeShader_;
     Shader cursorShader_;
+    Shader ropeShader_;
     bool ready_ = false;
 };
 
