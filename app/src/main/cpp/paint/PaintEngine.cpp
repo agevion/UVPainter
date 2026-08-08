@@ -722,7 +722,6 @@ void PaintEngine::performFill(const Camera& camera) {
         }
         predictedDrawnLastFrame_ = false;
         compositeStroke();
-        doc_->dilate(layer->texture, 2);
         doc_->markDirty();
         pushStrokePatch();
         GL_CHECK("PaintEngine::performFill(area)");
@@ -757,9 +756,12 @@ void PaintEngine::performFill(const Camera& camera) {
 
     predictedDrawnLastFrame_ = false;
     compositeStroke();
-    // Un par de pasadas de dilatado para que el relleno no deje un halo del
-    // color anterior justo en el borde de la isla.
-    doc_->dilate(layer->texture, 2);
+    // Aqui habia un dilatado de la capa entera, y era destructivo: el shader
+    // reescribe con alfa 1.0 todo texel transparente que tenga un vecino
+    // pintado, asi que cada relleno engordaba DOS texeles de borde duro y opaco
+    // a todos los trazos de la capa, se hubieran tocado o no. Ademas no hacia
+    // falta: las costuras ya se dilatan en composite() para la pantalla y en
+    // readComposite() para la exportacion, sobre copias y no sobre los datos.
     doc_->markDirty();
     pushStrokePatch();
     GL_CHECK("PaintEngine::performFill");
@@ -835,6 +837,26 @@ bool PaintEngine::fillClosedArea(Vec2 seedUv) {
             if (out[n] != 0u || !matches(n)) continue;
             out[n] = 255u;
             pending.push_back(static_cast<uint32_t>(n));
+        }
+    }
+
+    // El contorno esta dibujado con los bordes suavizados, asi que sus texels de
+    // transicion ya no encajan con el color de dentro y el recorrido se para
+    // antes de llegar a la linea: queda un halo sin pintar entre el relleno y el
+    // trazo. Se crece la mascara un par de texels para que se meta por debajo de
+    // ese borde, que es lo que hace cualquier editor de fotos.
+    for (int pass = 0; pass < 2; ++pass) {
+        const std::vector<uint8_t> prev = out;
+        for (int y = 0; y < res; ++y) {
+            for (int x = 0; x < res; ++x) {
+                const size_t i = static_cast<size_t>(y) * static_cast<size_t>(res) + x;
+                if (prev[i] != 0u) continue;
+                if (hasMask && uvMask[i * 4u] < 128u) continue;
+                const bool touching =
+                    (x > 0 && prev[i - 1] != 0u) || (x < res - 1 && prev[i + 1] != 0u) ||
+                    (y > 0 && prev[i - res] != 0u) || (y < res - 1 && prev[i + res] != 0u);
+                if (touching) out[i] = 255u;
+            }
         }
     }
 

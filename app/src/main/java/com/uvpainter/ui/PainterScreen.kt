@@ -222,9 +222,9 @@ private fun BoxScope.LeftRail(controller: PainterController) {
             valueRange = 0f..1f,
             onValueChange = { value -> controller.updateBrush { it.copy(opacity = value) } },
         )
-        // La longitud de cuerda solo aparece con el regulador encendido: ocupa
-        // sitio y no significa nada mientras esta apagado.
-        if (controller.brush.stabilizerRadiusPx > 0.5f) {
+        // La longitud de cuerda solo aparece con el regulador encendido y con el
+        // pincel en la mano: ocupa sitio y no significa nada en el resto.
+        if (controller.brush.stabilizerRadiusPx > 0.5f && controller.tool == Tool.BRUSH) {
             Spacer(modifier = Modifier.height(14.dp))
             RailSlider(
                 caption = "REG",
@@ -342,11 +342,13 @@ private fun BoxScope.TopToolbar(
             controller.changeTool(Tool.PICKER)
         }
         // El regulador se enciende y se apaga a media lamina, asi que vive en la
-        // barra y no dentro de un panel.
+        // barra y no dentro de un panel. Solo con el pincel: el bote y el
+        // cuentagotas no trazan nada, asi que ahi no significa nada.
         ToolIcon(
             Icons.Filled.Gesture,
             "Regular trazo",
             selected = controller.brush.stabilizerRadiusPx > 0.5f,
+            enabled = controller.tool == Tool.BRUSH,
         ) {
             controller.setStabilizerEnabled(controller.brush.stabilizerRadiusPx <= 0.5f)
         }
