@@ -275,5 +275,8 @@ El modelo de ejemplo que trae la app, `app/src/main/assets/models/WaterBottle.gl
 procede de los [glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
 de Khronos: *WaterBottle*, © 2017 Microsoft, publicado bajo
 [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) (dominio
-público). Se ha modificado para quitarle las texturas incrustadas, que la app no
-usa porque pinta las suyas: de 8,6 MB a 147 KB, conservando geometría y UVs.
+público). Se ha modificado en dos cosas: quitarle las texturas incrustadas, que
+la app no usa porque pinta las suyas (de 8,6 MB a 147 KB, con la geometría y las
+UVs intactas), y bajarlo para que se apoye en el plano del origen en vez de
+quedar centrado en él, que es la convención que espera la heurística de
+orientación descrita más arriba.
