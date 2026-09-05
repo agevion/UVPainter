@@ -61,6 +61,7 @@ public:
     const Layer* layerAt(int index) const;
     Layer* activeLayer() { return layerAt(activeIndex_); }
     int activeIndex() const { return activeIndex_; }
+    int nextLayerId() const { return nextLayerId_; }
     void setActiveIndex(int index);
 
     int addLayer(const std::string& name, int insertAbove);
@@ -110,6 +111,22 @@ public:
     bool captureState(DocumentState& out);
     bool restoreState(const DocumentState& state);
 
+    // --- Lectura sin esperas --------------------------------------------
+    //
+    // `glReadPixels` normal para el atlas entero (16 MB a 2K) planta el hilo de
+    // render hasta que la GPU termina todo lo que tenia encolado: es un parón
+    // seco de decimas de segundo, y con el autoguardado eso caia a media lamina.
+    // Con un buffer de empaquetado la lectura se pide y se vuelve enseguida; la
+    // GPU la sirve por su cuenta y un frame despues los bytes ya estan ahi sin
+    // que nadie haya esperado.
+    //
+    // Se usan asi: `beginReadback` una vez, `readbackReady` cada frame hasta que
+    // diga que si, y entonces `finishReadback`.
+    bool beginReadback(const Texture2D& tex);
+    bool readbackReady();
+    bool finishReadback(std::vector<uint8_t>& out);
+    bool readbackPending() const { return packFence_ != nullptr; }
+
     // Lee un rectangulo de una textura de capa (lo usa el sistema de deshacer).
     bool readRegion(const Texture2D& tex, int x, int y, int w, int h, std::vector<uint8_t>& out);
     void writeRegion(Texture2D& tex, int x, int y, int w, int h, const uint8_t* pixels);
@@ -147,6 +164,11 @@ private:
     bool regionsDirty_ = true;
     bool hasRegions_ = false;
     int regionResolution_ = 0;
+
+    /// Buffer de empaquetado y su valla, para las lecturas sin espera.
+    unsigned int packBuffer_ = 0;
+    void* packFence_ = nullptr;  // GLsync, sin arrastrar aqui las cabeceras GL
+    size_t packBytes_ = 0;
 
     Framebuffer workFbo_;
     Shader compositeShader_;

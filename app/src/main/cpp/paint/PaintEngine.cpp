@@ -89,9 +89,13 @@ bool PaintEngine::ensureResources() {
         if (size == kReduceTarget) break;
     }
 
-    // El presupuesto de historial escala con el tamano del documento.
+    // El presupuesto de historial escala con el tamano del documento, pero con
+    // un techo mucho mas bajo que antes: los parches son del tamano del trazo,
+    // no de la capa, asi que 192 MB siguen dando cientos de pasos, y dejar que
+    // el proceso se hinchara medio giga era comprar tirones de medio segundo
+    // cuando el sistema empieza a reclamar memoria a media lamina.
     const size_t budget = static_cast<size_t>(res) * static_cast<size_t>(res) * 4u * 24u;
-    undoStack_.setMemoryBudget(std::min<size_t>(budget, 512u * 1024u * 1024u));
+    undoStack_.setMemoryBudget(std::min<size_t>(budget, 192u * 1024u * 1024u));
 
     LOGI("PaintEngine listo para atlas %dx%d (%zu niveles de reduccion)", res, res,
          reducePyramid_.size());
@@ -250,6 +254,21 @@ void PaintEngine::emitSegment(const StrokePoint& from, const StrokePoint& to) {
 
 void PaintEngine::addPredictedPoint(const StrokePoint& point) {
     if (!strokeActive_) return;
+
+    // Con el regulador de trazo no se predice nada, y esto era EL problema del
+    // regulador: los puntos extrapolados llegan en crudo, sin pasar por la
+    // cuerda, asi que el primer segmento predicho iba desde el extremo de la
+    // cuerda hasta la punta del lapiz y mas alla. En pantalla se veia pintura
+    // rellenando justo el hueco que el regulador acababa de dejar: tapaba la
+    // cuerda, tapaba el anillo y hacia creer que se estaba pintando donde no.
+    // Al soltar desaparecia —la mascara de prediccion se borra en cada frame y
+    // nunca se graba en la capa—, y esa diferencia entre lo que se ve y lo que
+    // queda es justo lo que desorienta.
+    //
+    // Adelantarse tampoco tiene sentido aqui: el regulador es un retraso
+    // buscado. La pintura empieza en el extremo de la cuerda y en ningun sitio
+    // antes, como en Sketchbook.
+    if (brush_.stabilizerRadiusPx > 0.5f) return;
 
     const StrokePoint& from = hasPredicted_ ? predictedTail_ : lastEmitted_;
     if (length(point.screen - from.screen) < 0.5f) return;

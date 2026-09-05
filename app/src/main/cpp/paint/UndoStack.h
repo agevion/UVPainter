@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,9 @@ public:
 private:
     void trimToBudget();
 
-    std::vector<PixelPatch> records_;
+    // Cola doble y no vector: al pasarse del presupuesto se tira el paso mas
+    // antiguo, y eso en un vector obliga a recolocar todos los demas.
+    std::deque<PixelPatch> records_;
     int cursor_ = 0;  // numero de registros ya aplicados
     size_t usedBytes_ = 0;
     size_t budgetBytes_ = 320u * 1024u * 1024u;

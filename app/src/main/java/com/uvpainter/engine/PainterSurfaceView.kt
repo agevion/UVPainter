@@ -63,6 +63,13 @@ class PainterSurfaceView @JvmOverloads constructor(
 
     var penButtonErases = true
     var twistToRotateView = true
+
+    /** El pellizco acerca hacia su propio centro en vez de hacia el de la pantalla. */
+    var zoomToPinchCenter = true
+
+    /** Intercambia los gestos: dos dedos desplazan y tres orbitan. */
+    var twoFingerPan = false
+
     var invertOrbitX = false
     var invertOrbitY = false
     var orbitSensitivity = 1.0f
@@ -77,6 +84,13 @@ class PainterSurfaceView @JvmOverloads constructor(
     var onPalmRejected: (() -> Unit)? = null
     var onFillRequested: ((Float, Float) -> Unit)? = null
     var onPickRequested: ((Float, Float) -> Unit)? = null
+
+    /**
+     * Un contacto de verdad sobre el lienzo: lapiz que aterriza o dedo que no
+     * se ha descartado como palma. Sirve para cerrar los paneles abiertos, que
+     * es lo que espera cualquiera que toca fuera de un menu.
+     */
+    var onViewportTouch: (() -> Unit)? = null
 
     /** Herramienta activa del lapiz. */
     var penAction = PenAction.PAINT
@@ -194,6 +208,7 @@ class PainterSurfaceView @JvmOverloads constructor(
             }
             resetGesture()
             if (rejectedAny) onPalmRejected?.invoke()
+            onViewportTouch?.invoke()
 
             when (penAction) {
                 PenAction.FILL -> onFillRequested?.invoke(event.getX(index), event.getY(index))
@@ -213,6 +228,7 @@ class PainterSurfaceView @JvmOverloads constructor(
             onPalmRejected?.invoke()
             return
         }
+        onViewportTouch?.invoke()
 
         if (fingerCanPaint && countActiveFingers(event) == 1) {
             requestUnbufferedDispatch(event)
@@ -440,7 +456,11 @@ class PainterSurfaceView @JvmOverloads constructor(
         //   1 dedo  -> orbitar (solo si el usuario baja el minimo a 1)
         //   2 dedos -> orbitar, con pellizco para zoom y giro para rodar
         //   3 dedos -> desplazar
-        if (count >= 3) {
+        // Con [twoFingerPan] los dos ultimos se cambian el sitio: dos dedos
+        // desplazan (subir y bajar la camara sin darle la vuelta al modelo) y
+        // tres orbitan. El pellizco sigue siendo el pellizco en los dos casos.
+        val panning = if (twoFingerPan) count == 2 else count >= 3
+        if (panning) {
             NativeBridge.nativeCameraGesture(
                 handle, NativeBridge.GESTURE_PAN, dx * panSensitivity, dy * panSensitivity,
             )
@@ -454,7 +474,14 @@ class PainterSurfaceView @JvmOverloads constructor(
         if (count >= 2 && anchorDistance > 8f && distance > 8f) {
             val ratio = 1f + (distance / anchorDistance - 1f) * zoomSensitivity
             if (ratio > 0.01f) {
-                NativeBridge.nativeCameraGesture(handle, NativeBridge.GESTURE_ZOOM, ratio, 0f)
+                // El centro del pellizco es el centroide de los dedos, que es el
+                // punto que el usuario esta mirando: acercar hacia ahi ahorra
+                // tener que encuadrar antes de cada zoom.
+                if (zoomToPinchCenter) {
+                    NativeBridge.nativeCameraZoomAt(handle, ratio, cx, cy)
+                } else {
+                    NativeBridge.nativeCameraGesture(handle, NativeBridge.GESTURE_ZOOM, ratio, 0f)
+                }
             }
             if (twistToRotateView) {
                 var delta = angle - anchorAngle
@@ -523,9 +550,12 @@ class PainterSurfaceView @JvmOverloads constructor(
         if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
             val scroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
             if (scroll != 0f) {
-                NativeBridge.nativeCameraGesture(
-                    handle, NativeBridge.GESTURE_ZOOM, 1f + scroll * 0.12f, 0f,
-                )
+                val ratio = 1f + scroll * 0.12f
+                if (zoomToPinchCenter) {
+                    NativeBridge.nativeCameraZoomAt(handle, ratio, event.x, event.y)
+                } else {
+                    NativeBridge.nativeCameraGesture(handle, NativeBridge.GESTURE_ZOOM, ratio, 0f)
+                }
                 renderThread?.requestRender()
                 return true
             }

@@ -748,8 +748,9 @@ in vec2 vUv;
 layout(location = 0) out vec4 fragColor;
 
 uniform vec2 uViewportSize;
-uniform vec2 uAnchor;   // px, donde cae la pintura
-uniform vec2 uTip;      // px, la punta del lapiz
+uniform vec2 uAnchor;     // px, donde cae la pintura
+uniform vec2 uTip;        // px, la punta del lapiz
+uniform float uHoleRadius; // px, hueco alrededor del anclaje
 uniform vec4 uColor;
 
 void main() {
@@ -762,15 +763,18 @@ void main() {
     float t = clamp(dot(pa, ba) / len2, 0.0, 1.0);
     float line = length(pa - ba * t);
 
-    // La cuerda se dibuja fina y con la punta un poco mas marcada, para que se
-    // lea sobre cualquier fondo sin tapar lo que hay debajo.
+    // Solo el hilo, y fino. Aqui habia ademas un anillo en la punta del lapiz,
+    // y era justo lo que estorbaba: con el pincel pequeño se confundia con el
+    // circulo del pincel y tapaba el punto que se estaba mirando. El unico
+    // circulo que se dibuja es el del extremo de la cuerda, que es donde cae la
+    // pintura de verdad.
     float rope = 1.0 - smoothstep(0.6, 1.8, line);
 
-    float dTip = length(p - uTip);
-    float ring = clamp((1.0 - smoothstep(3.2, 4.4, dTip)) -
-                       (1.0 - smoothstep(2.0, 3.0, dTip)), 0.0, 1.0);
+    // Y el hilo arranca en el borde de ese circulo, no en su centro: cruzarlo
+    // por debajo solo tapaba el sitio donde se esta mirando.
+    rope *= smoothstep(uHoleRadius, uHoleRadius + 2.0, length(p - uAnchor));
 
-    float alpha = max(rope * 0.65, ring) * uColor.a;
+    float alpha = rope * 0.65 * uColor.a;
     if (alpha <= 0.002) discard;
     fragColor = vec4(uColor.rgb, alpha);
 }

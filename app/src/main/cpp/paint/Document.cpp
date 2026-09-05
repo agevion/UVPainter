@@ -1,6 +1,7 @@
 #include "paint/Document.h"
 
 #include <algorithm>
+#include <cstring>
 
 #include "core/Log.h"
 #include "render/Shaders.h"
@@ -47,6 +48,15 @@ bool Document::create(int resolution) {
 }
 
 void Document::destroy() {
+    if (packFence_ != nullptr) {
+        glDeleteSync(static_cast<GLsync>(packFence_));
+        packFence_ = nullptr;
+    }
+    if (packBuffer_ != 0) {
+        glDeleteBuffers(1, &packBuffer_);
+        packBuffer_ = 0;
+    }
+    packBytes_ = 0;
     layers_.clear();
     composite_.destroy();
     scratchA_.destroy();
@@ -248,6 +258,9 @@ bool Document::duplicateLayer(int index) {
     const Layer* src = layerAt(index);
     if (src == nullptr) return false;
 
+    // La coletilla se escribe aqui en castellano y la interfaz la reconoce y la
+    // traduce al pintarla (ver i18n/Strings.kt): el nombre viaja dentro del
+    // documento, asi que no puede depender del idioma que hubiera al duplicar.
     const int newIndex = addLayer(src->info.name + " copia", index);
     Layer* dst = layerAt(newIndex);
     if (dst == nullptr) return false;
@@ -414,6 +427,65 @@ void Document::dilate(Texture2D& target, int iterations) {
 // ---------------------------------------------------------------------------
 // Lectura hacia CPU
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Lectura sin esperas
+// ---------------------------------------------------------------------------
+bool Document::beginReadback(const Texture2D& tex) {
+    if (!tex.valid() || resolution_ <= 0 || packFence_ != nullptr) return false;
+
+    const size_t bytes = static_cast<size_t>(resolution_) * static_cast<size_t>(resolution_) * 4u;
+    if (packBuffer_ == 0) glGenBuffers(1, &packBuffer_);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer_);
+    if (packBytes_ != bytes) {
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(bytes), nullptr, GL_STREAM_READ);
+        packBytes_ = bytes;
+    }
+
+    bindTargetTexture(tex);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    // El puntero nulo no es un descuido: con un buffer de empaquetado atado, el
+    // ultimo argumento deja de ser una direccion de memoria y pasa a ser un
+    // desplazamiento dentro del buffer.
+    glReadPixels(0, 0, resolution_, resolution_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    Framebuffer::unbind();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    packFence_ = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // Sin esto la valla puede quedarse en la cola del driver sin llegar a la
+    // GPU, y entonces no se cumple nunca por mucho que se pregunte.
+    glFlush();
+    GL_CHECK("Document::beginReadback");
+    return packFence_ != nullptr;
+}
+
+bool Document::readbackReady() {
+    if (packFence_ == nullptr) return false;
+    const GLenum result = glClientWaitSync(static_cast<GLsync>(packFence_), 0, 0);
+    return result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED;
+}
+
+bool Document::finishReadback(std::vector<uint8_t>& out) {
+    if (packFence_ == nullptr || packBuffer_ == 0 || packBytes_ == 0) return false;
+
+    glDeleteSync(static_cast<GLsync>(packFence_));
+    packFence_ = nullptr;
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer_);
+    void* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                    static_cast<GLsizeiptr>(packBytes_), GL_MAP_READ_BIT);
+    if (mapped == nullptr) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        LOGE("No se pudo mapear el buffer de lectura");
+        return false;
+    }
+    out.resize(packBytes_);
+    std::memcpy(out.data(), mapped, packBytes_);
+    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    GL_CHECK("Document::finishReadback");
+    return true;
+}
+
 bool Document::readRegion(const Texture2D& tex, int x, int y, int w, int h,
                           std::vector<uint8_t>& out) {
     if (!tex.valid() || w <= 0 || h <= 0) return false;

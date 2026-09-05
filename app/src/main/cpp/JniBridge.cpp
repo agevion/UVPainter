@@ -92,11 +92,11 @@ JNIEXPORT jboolean JNICALL Java_com_uvpainter_engine_NativeBridge_nativeDrawFram
 JNIEXPORT jstring JNICALL Java_com_uvpainter_engine_NativeBridge_nativeLoadModel(
     JNIEnv* env, jobject, jlong handle, jbyteArray data, jstring extension, jstring name) {
     Engine* engine = engineFrom(handle);
-    if (engine == nullptr || data == nullptr) return env->NewStringUTF("Motor no inicializado");
+    if (engine == nullptr || data == nullptr) return env->NewStringUTF("err.engine_not_ready");
 
     const jsize size = env->GetArrayLength(data);
     jbyte* bytes = env->GetByteArrayElements(data, nullptr);
-    if (bytes == nullptr) return env->NewStringUTF("No se pudo leer el archivo");
+    if (bytes == nullptr) return env->NewStringUTF("err.file_unreadable");
 
     std::string error;
     const bool ok = engine->loadModel(reinterpret_cast<const uint8_t*>(bytes),
@@ -118,16 +118,37 @@ JNIEXPORT jstring JNICALL Java_com_uvpainter_engine_NativeBridge_nativeGetModelN
 JNIEXPORT jstring JNICALL Java_com_uvpainter_engine_NativeBridge_nativeSaveProject(
     JNIEnv* env, jobject, jlong handle, jstring path) {
     Engine* engine = engineFrom(handle);
-    if (engine == nullptr) return env->NewStringUTF("Motor no inicializado");
+    if (engine == nullptr) return env->NewStringUTF("err.engine_not_ready");
     std::string error;
     if (engine->saveProject(toStdString(env, path), error)) return nullptr;
     return env->NewStringUTF(error.c_str());
 }
 
+JNIEXPORT jboolean JNICALL Java_com_uvpainter_engine_NativeBridge_nativeBeginCheckpoint(
+    JNIEnv* env, jobject, jlong handle, jstring path) {
+    Engine* engine = engineFrom(handle);
+    if (engine == nullptr) return JNI_FALSE;
+    return engine->beginCheckpoint(toStdString(env, path)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL Java_com_uvpainter_engine_NativeBridge_nativeCheckpointStatus(
+    JNIEnv*, jobject, jlong handle) {
+    Engine* engine = engineFrom(handle);
+    if (engine == nullptr) return 0;
+    return engine->checkpointStatus();
+}
+
+JNIEXPORT jstring JNICALL Java_com_uvpainter_engine_NativeBridge_nativeCheckpointError(
+    JNIEnv* env, jobject, jlong handle) {
+    Engine* engine = engineFrom(handle);
+    if (engine == nullptr || engine->checkpointError().empty()) return nullptr;
+    return env->NewStringUTF(engine->checkpointError().c_str());
+}
+
 JNIEXPORT jstring JNICALL Java_com_uvpainter_engine_NativeBridge_nativeLoadProject(
     JNIEnv* env, jobject, jlong handle, jstring path) {
     Engine* engine = engineFrom(handle);
-    if (engine == nullptr) return env->NewStringUTF("Motor no inicializado");
+    if (engine == nullptr) return env->NewStringUTF("err.engine_not_ready");
     std::string error;
     if (engine->loadProject(toStdString(env, path), error)) return nullptr;
     return env->NewStringUTF(error.c_str());
@@ -295,6 +316,18 @@ JNIEXPORT void JNICALL Java_com_uvpainter_engine_NativeBridge_nativeCameraGestur
     }
     cmd.x = a;
     cmd.y = b;
+    engine->pushCommand(cmd);
+}
+
+JNIEXPORT void JNICALL Java_com_uvpainter_engine_NativeBridge_nativeCameraZoomAt(
+    JNIEnv*, jobject, jlong handle, jfloat ratio, jfloat x, jfloat y) {
+    Engine* engine = engineFrom(handle);
+    if (engine == nullptr) return;
+    InputCommand cmd;
+    cmd.kind = InputCommand::Kind::ZoomAt;
+    cmd.x = ratio;
+    cmd.y = x;
+    cmd.tilt = y;
     engine->pushCommand(cmd);
 }
 

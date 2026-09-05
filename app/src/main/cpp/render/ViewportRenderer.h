@@ -48,7 +48,10 @@ public:
                      const ViewportSettings& settings);
 
     /// Cuerda del regulador: une donde cae la pintura con la punta del lapiz.
-    void drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx, Vec4 color);
+    /// `holeRadiusPx` es el hueco que se deja alrededor del anclaje para no
+    /// dibujar por debajo del circulo del pincel.
+    void drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx, float holeRadiusPx,
+                  Vec4 color);
     void drawBrushCursor(int width, int height, Vec2 centerPx, float radiusPx, float hardness,
                          Vec4 color);
 

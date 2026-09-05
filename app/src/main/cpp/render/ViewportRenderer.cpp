@@ -156,11 +156,14 @@ void ViewportRenderer::drawBrushCursor(int width, int height, Vec2 centerPx, flo
     GL_CHECK("ViewportRenderer::drawBrushCursor");
 }
 
-void ViewportRenderer::drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx, Vec4 color) {
+void ViewportRenderer::drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx,
+                                float holeRadiusPx, Vec4 color) {
     if (!ready_) return;
     // Con la cuerda destensada los dos extremos coinciden y no hay nada que
     // dibujar; pintar un segmento de longitud cero solo mete un punto raro.
-    if (length(tipPx - anchorPx) < 1.5f) return;
+    // Y si la punta cae dentro del circulo del pincel, tampoco: el hilo
+    // quedaria entero por debajo y solo ensuciaria el sitio que se mira.
+    if (length(tipPx - anchorPx) < std::max(holeRadiusPx + 2.0f, 1.5f)) return;
 
     Framebuffer::unbind();
     glViewport(0, 0, width, height);
@@ -175,6 +178,7 @@ void ViewportRenderer::drawRope(int width, int height, Vec2 anchorPx, Vec2 tipPx
                     Vec2(static_cast<float>(width), static_cast<float>(height)));
     ropeShader_.set("uAnchor", anchorPx);
     ropeShader_.set("uTip", tipPx);
+    ropeShader_.set("uHoleRadius", holeRadiusPx);
     ropeShader_.set("uColor", color);
     drawFullscreenTriangle();
 

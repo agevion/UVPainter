@@ -9,6 +9,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -209,6 +211,28 @@ fun PanelTitle(text: String, modifier: Modifier = Modifier) {
         color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier.padding(bottom = 6.dp),
     )
+}
+
+/**
+ * Fila de fichas que se parte en varias lineas cuando no cabe.
+ *
+ * En un [Row] normal, la ultima ficha se lleva todo el aprieto: se queda sin
+ * ancho y su texto cae en vertical, una letra por linea, dejando un boquete en
+ * el panel. Con cuatro palabras cortas no se nota, pero «Pivoter 90°» al lado de
+ * «Y vers le haut» ya no cabe, y la misma fila que en castellano estaba holgada
+ * revienta en frances o en aleman. Aqui la ficha que no entra baja a la
+ * siguiente linea y se lee entera.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ChipRow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        content()
+    }
 }
 
 @Composable

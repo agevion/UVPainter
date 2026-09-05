@@ -6,6 +6,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "gl/GLObjects.h"
@@ -32,6 +33,10 @@ struct InputCommand {
         Orbit,
         Pan,
         Zoom,
+        /// Zoom hacia un punto: x = factor, y = pixel horizontal del pellizco,
+        /// tilt = pixel vertical. Se reaprovechan los campos que un gesto de
+        /// camara no usa para no cambiar la forma del comando.
+        ZoomAt,
         Roll,
         Hover,
         HoverEnd,
@@ -44,6 +49,27 @@ struct InputCommand {
     float tilt = 0.0f;
     float orientation = 0.0f;
     double timeMs = 0.0;
+};
+
+/**
+ * Todo lo que hace falta para escribir un .uvp, y nada mas.
+ *
+ * Se lleva copia propia de los bytes del modelo a proposito: el archivo se
+ * escribe desde otro hilo, y mientras tanto aqui se puede estar cargando otra
+ * cosa. Los bloques comprimidos se rellenan justo antes de escribir.
+ */
+struct ProjectPayload {
+    DocumentState state;
+    int upAxis = 0;
+    bool flipUp = false;
+    int quarterTurns = 0;
+    std::string modelExt;
+    std::string modelName;
+    std::vector<uint8_t> modelBytes;
+
+    std::vector<uint8_t> packedModel;
+    std::vector<std::vector<uint8_t>> packedLayers;
+    std::vector<uint8_t> packedBoundary;
 };
 
 struct MeshStats {
@@ -79,6 +105,19 @@ public:
     // a mano, para poder retomar el trabajo tal cual se dejo.
     bool saveProject(const std::string& path, std::string& error);
     bool loadProject(const std::string& path, std::string& error);
+
+    // --- Punto de control en segundo plano --------------------------------
+    // La version silenciosa de guardar, para el autoguardado: reparte la
+    // lectura entre frames y deja la compresion y el archivo a hilos aparte,
+    // de modo que el que dibuja no espera por nada. Ver Engine.cpp.
+    //
+    // `beginCheckpoint` devuelve false si ya hay uno en marcha; `pollCheckpoint`
+    // se llama una vez por frame; `checkpointStatus` devuelve 0 parado,
+    // 1 en marcha, 2 terminado, 3 fallado, y al leer un 2 o un 3 lo consume.
+    bool beginCheckpoint(const std::string& path);
+    void pollCheckpoint();
+    int checkpointStatus();
+    const std::string& checkpointError() const { return checkpoint_.error; }
     const std::string& modelName() const { return modelName_; }
 
     // Los modelos llegan con ejes distintos segun de donde salgan (Max y Blender
@@ -118,6 +157,9 @@ public:
 private:
     void drainCommands();
     void handleCommand(const InputCommand& cmd);
+    void fillPayloadMeta(ProjectPayload& payload) const;
+    void startCheckpointWorker();
+    void failCheckpoint(const char* reason);
     /// `frameCamera` en false conserva el encuadre: al recuperar el contexto la
     /// malla se vuelve a subir, pero mover la camara ahi seria desconcertante.
     void rebuildOrientedMesh(bool frameCamera = true);
@@ -156,6 +198,24 @@ private:
     Vec2 hoverPos_{0.0f, 0.0f};
     bool hoverVisible_ = false;
     float hoverPressure_ = 0.0f;
+
+    /// Punto de control a plazos. Solo lo toca el hilo de render, salvo las
+    /// tres marcas atomicas y el trabajo del hilo que escribe.
+    struct Checkpoint {
+        enum class Stage { Idle, Reading, Writing, Done, Failed };
+        Stage stage = Stage::Idle;
+        std::string path;
+        ProjectPayload payload;
+        /// La pared se lee en cuatro canales y se aprieta a uno al escribir.
+        std::vector<uint8_t> boundaryRgba;
+        int layerIndex = 0;
+        bool readingBoundary = false;
+        std::thread worker;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> ok{false};
+        std::string error;
+    };
+    Checkpoint checkpoint_;
 
     std::mutex commandMutex_;
     std::vector<InputCommand> commandQueue_;

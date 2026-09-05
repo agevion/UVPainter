@@ -55,6 +55,26 @@ Ese mismo ajuste está en el panel de Pincel como «El dedo también pinta».
 | Ocultar la interfaz | Toque con cuatro dedos |
 | Borrador temporal | Botón lateral del S-Pen |
 
+### Idiomas
+
+La interfaz habla castellano, inglés, francés, italiano y alemán. Se cambia en
+el panel de documento (el engranaje de la barra), lo primero de todo: quien abre
+la app en una lengua que no es la suya no puede leer el resto del panel para
+encontrar el ajuste. El cambio es inmediato y no recrea la actividad, así que se
+puede probar a media lámina sin perder nada.
+
+Mientras nadie elija, se sigue al idioma del sistema si es uno de esos cinco;
+si no, castellano. En cuanto se toca la lista, manda la elección y se recuerda
+entre sesiones.
+
+Los rótulos no viven en `res/values/strings.xml` sino en `i18n/`, en tablas de
+Kotlin: un recurso de Android obliga a recrear la actividad para cambiar de
+idioma, y aquí eso significaría tirar el contexto GL y con él el historial. Cada
+tabla es un `Strings` completo, así que dejarse un texto al traducir no compila.
+Los mensajes de error suben del motor como clave (`err.glb_truncated`) y se
+traducen en Kotlin: un motor que hablara castellano dejaría media app sin
+traducir justo cuando algo falla.
+
 ### Rechazo de palma
 
 Enrutar por tipo de herramienta no basta: al apoyar la mano, el canto de la
@@ -140,6 +160,7 @@ app/src/main/
   java/com/uvpainter/
     engine/              NativeBridge, RenderThread, PainterSurfaceView (S-Pen)
     state/               PainterController y estado de Compose
+    i18n/                rótulos de la interfaz en los cinco idiomas
     ui/                  interfaz en Compose
     io/TextureIo         PNG y SAF vía APIs de Android
 ```

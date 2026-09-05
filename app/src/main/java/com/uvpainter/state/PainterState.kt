@@ -1,6 +1,7 @@
 package com.uvpainter.state
 
 import androidx.compose.ui.graphics.Color
+import com.uvpainter.i18n.Strings
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -23,23 +24,46 @@ object ColorAsLong : KSerializer<Color> {
     override fun deserialize(decoder: Decoder): Color = Color(decoder.decodeLong().toULong())
 }
 
-enum class ViewMode(val nativeValue: Int, val label: String) {
-    UNLIT(0, "Plano"),
-    PBR(1, "PBR"),
-    MATCAP(2, "Matcap"),
-    UV_CHECKER(3, "Cuadrícula UV"),
+/**
+ * Los rotulos ya no viven en la enumeracion sino en [Strings]: el mismo modo se
+ * lee distinto en cada idioma, y una constante escrita aqui no sabe cambiar.
+ */
+enum class ViewMode(val nativeValue: Int) {
+    UNLIT(0),
+    PBR(1),
+    MATCAP(2),
+    UV_CHECKER(3),
+    ;
+
+    fun label(strings: Strings): String = when (this) {
+        UNLIT -> strings.labels.viewUnlit
+        PBR -> strings.labels.viewPbr
+        MATCAP -> strings.labels.viewMatcap
+        UV_CHECKER -> strings.labels.viewUvChecker
+    }
 }
 
-enum class BlendMode(val nativeValue: Int, val label: String) {
-    NORMAL(0, "Normal"),
-    MULTIPLY(1, "Multiplicar"),
-    SCREEN(2, "Trama"),
-    OVERLAY(3, "Superponer"),
-    ADD(4, "Añadir"),
-    COLOR_DODGE(5, "Subexponer"),
-    COLOR_BURN(6, "Sobreexponer"),
-    SOFT_LIGHT(7, "Luz suave"),
+enum class BlendMode(val nativeValue: Int) {
+    NORMAL(0),
+    MULTIPLY(1),
+    SCREEN(2),
+    OVERLAY(3),
+    ADD(4),
+    COLOR_DODGE(5),
+    COLOR_BURN(6),
+    SOFT_LIGHT(7),
     ;
+
+    fun label(strings: Strings): String = when (this) {
+        NORMAL -> strings.labels.blendNormal
+        MULTIPLY -> strings.labels.blendMultiply
+        SCREEN -> strings.labels.blendScreen
+        OVERLAY -> strings.labels.blendOverlay
+        ADD -> strings.labels.blendAdd
+        COLOR_DODGE -> strings.labels.blendDodge
+        COLOR_BURN -> strings.labels.blendBurn
+        SOFT_LIGHT -> strings.labels.blendSoftLight
+    }
 
     companion object {
         fun fromNative(value: Int): BlendMode = entries.firstOrNull { it.nativeValue == value } ?: NORMAL
@@ -49,20 +73,37 @@ enum class BlendMode(val nativeValue: Int, val label: String) {
 enum class PaintMode(val nativeValue: Int) { PAINT(0), ERASE(1), BOUNDARY(2) }
 
 /** Forma de la punta: es lo que diferencia un pincel de otro de verdad. */
-enum class TipShape(val nativeValue: Int, val label: String) {
-    ROUND(0, "Redonda"),
-    FLAT(1, "Plana"),
-    SQUARE(2, "Cuadrada"),
-    SPRAY(3, "Spray"),
+enum class TipShape(val nativeValue: Int) {
+    ROUND(0),
+    FLAT(1),
+    SQUARE(2),
+    SPRAY(3),
+    ;
+
+    fun label(strings: Strings): String = when (this) {
+        ROUND -> strings.labels.tipRound
+        FLAT -> strings.labels.tipFlat
+        SQUARE -> strings.labels.tipSquare
+        SPRAY -> strings.labels.tipSpray
+    }
 }
 
 /** Figuras que puede trazar la herramienta de formas. */
-enum class ShapeKind(val nativeValue: Int, val label: String) {
-    NONE(0, "Libre"),
-    LINE(1, "Línea"),
-    RECTANGLE(2, "Rectángulo"),
-    ELLIPSE(3, "Elipse"),
-    POLYGON(4, "Polígono"),
+enum class ShapeKind(val nativeValue: Int) {
+    NONE(0),
+    LINE(1),
+    RECTANGLE(2),
+    ELLIPSE(3),
+    POLYGON(4),
+    ;
+
+    fun label(strings: Strings): String = when (this) {
+        NONE -> strings.labels.shapeFree
+        LINE -> strings.labels.shapeLine
+        RECTANGLE -> strings.labels.shapeRectangle
+        ELLIPSE -> strings.labels.shapeEllipse
+        POLYGON -> strings.labels.shapePolygon
+    }
 }
 
 @Serializable
@@ -134,16 +175,29 @@ data class BrushState(
  * al soltar. El resto se disparan una vez, al pulsar.
  */
 @Serializable
-enum class PenButtonAction(val label: String, val momentary: Boolean = false) {
-    NONE("Nada"),
-    ERASE_WHILE_HELD("Borrar mientras lo mantengo", momentary = true),
-    PICK_WHILE_HELD("Cuentagotas mientras lo mantengo", momentary = true),
-    TOGGLE_ERASER("Cambiar entre pincel y borrador"),
-    UNDO("Deshacer"),
-    REDO("Rehacer"),
-    TOGGLE_STABILIZER("Activar o quitar el regulador de trazo"),
-    RESET_VIEW("Encuadrar el modelo"),
-    TOGGLE_UI("Ocultar o mostrar la interfaz"),
+enum class PenButtonAction(val momentary: Boolean = false) {
+    NONE,
+    ERASE_WHILE_HELD(momentary = true),
+    PICK_WHILE_HELD(momentary = true),
+    TOGGLE_ERASER,
+    UNDO,
+    REDO,
+    TOGGLE_STABILIZER,
+    RESET_VIEW,
+    TOGGLE_UI,
+    ;
+
+    fun label(strings: Strings): String = when (this) {
+        NONE -> strings.labels.penNone
+        ERASE_WHILE_HELD -> strings.labels.penEraseHeld
+        PICK_WHILE_HELD -> strings.labels.penPickHeld
+        TOGGLE_ERASER -> strings.labels.penToggleEraser
+        UNDO -> strings.labels.penUndo
+        REDO -> strings.labels.penRedo
+        TOGGLE_STABILIZER -> strings.labels.penToggleStabilizer
+        RESET_VIEW -> strings.labels.penResetView
+        TOGGLE_UI -> strings.labels.penToggleUi
+    }
 }
 
 /** Ajustes de entrada: rechazo de palma y gestos. */
@@ -157,10 +211,49 @@ data class InputSettings(
     val penButtonAction: PenButtonAction = PenButtonAction.ERASE_WHILE_HELD,
     val twistToRotateView: Boolean = true,
     val orbitSensitivity: Float = 1f,
+    /**
+     * El pellizco acerca hacia su propio centro, como la rueda del ratón en un
+     * escritorio: se pellizca sobre la pata del modelo y la cámara va derecha
+     * allí, sin tener que desplazar antes. Apagado, el zoom entra por el centro
+     * de la pantalla y hay que colocar la vista a mano.
+     */
+    val zoomToPinchCenter: Boolean = true,
+    /**
+     * Intercambia los dedos de navegación: dos desplazan y tres orbitan. Es lo
+     * que permite subir y bajar la cámara con el gesto más cómodo, para quien
+     * trabaja mirando una zona concreta en vez de dando vueltas al modelo.
+     */
+    val twoFingerPan: Boolean = false,
 )
 
 /** Ajustes de pincel guardados como preajuste. */
-data class BrushPreset(val name: String, val brush: BrushState)
+data class BrushPreset(val id: BrushPresetId, val brush: BrushState) {
+    fun name(strings: Strings): String = id.label(strings)
+}
+
+/** Los preajustes de fabrica: el nombre lo pone el idioma, no la lista. */
+enum class BrushPresetId {
+    INK,
+    FLAT_COLOR,
+    SOFT_SHADOW,
+    AIRBRUSH,
+    FINE_DETAIL,
+    RULER,
+    CHARCOAL,
+    DRY_TEXTURE,
+    ;
+
+    fun label(strings: Strings): String = when (this) {
+        INK -> strings.labels.presetInk
+        FLAT_COLOR -> strings.labels.presetFlat
+        SOFT_SHADOW -> strings.labels.presetSoftShadow
+        AIRBRUSH -> strings.labels.presetAirbrush
+        FINE_DETAIL -> strings.labels.presetFineDetail
+        RULER -> strings.labels.presetRuler
+        CHARCOAL -> strings.labels.presetCharcoal
+        DRY_TEXTURE -> strings.labels.presetDryTexture
+    }
+}
 
 @Serializable
 data class ViewportState(
@@ -245,12 +338,18 @@ data class UiSettings(
     val showFps: Boolean = false,
     /** Proyecto con nombre que estaba abierto, para seguir actualizándolo. */
     val openProjectPath: String? = null,
+    /**
+     * Idioma elegido a mano («es», «fr», «it», «de»). Mientras esté a nulo se
+     * sigue al del sistema, que es lo que espera quien nunca abre los ajustes;
+     * en cuanto se toca la lista, manda la elección y deja de moverse.
+     */
+    val language: String? = null,
 )
 
 /** Preajustes iniciales pensados para linea y color plano de estilo anime. */
 val defaultBrushPresets: List<BrushPreset> = listOf(
     BrushPreset(
-        "Entintado",
+        BrushPresetId.INK,
         BrushState(
             radiusPx = 14f, hardness = 0.98f, opacity = 1f, flow = 1f, smoothing = 0.55f,
             pressureGain = 1.8f, pressureCurve = 0.45f, pressureSizeFloor = 0.15f,
@@ -258,14 +357,14 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Color plano",
+        BrushPresetId.FLAT_COLOR,
         BrushState(
             radiusPx = 55f, hardness = 1f, opacity = 1f, flow = 1f, smoothing = 0.25f,
             pressureAffectsSize = false, pressureAffectsOpacity = false,
         ),
     ),
     BrushPreset(
-        "Sombra suave",
+        BrushPresetId.SOFT_SHADOW,
         BrushState(
             radiusPx = 90f, hardness = 0.15f, opacity = 0.5f, flow = 0.35f, smoothing = 0.3f,
             pressureGain = 1.4f, pressureCurve = 0.8f, pressureOpacityFloor = 0.15f,
@@ -273,7 +372,7 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Aerógrafo",
+        BrushPresetId.AIRBRUSH,
         BrushState(
             radiusPx = 130f, hardness = 0.05f, opacity = 0.3f, flow = 0.35f, smoothing = 0.2f,
             tipShape = TipShape.SPRAY, grainScale = 1400f,
@@ -282,7 +381,7 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Detalle fino",
+        BrushPresetId.FINE_DETAIL,
         BrushState(
             radiusPx = 6f, hardness = 0.95f, opacity = 1f, flow = 1f, smoothing = 0.6f,
             pressureGain = 1.8f, pressureCurve = 0.45f, pressureSizeFloor = 0.25f,
@@ -290,7 +389,7 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Tiralíneas",
+        BrushPresetId.RULER,
         BrushState(
             radiusPx = 26f, hardness = 0.95f, opacity = 1f, flow = 1f,
             stabilizerRadiusPx = 22f, smoothing = 0.4f,
@@ -300,7 +399,7 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Carboncillo",
+        BrushPresetId.CHARCOAL,
         BrushState(
             radiusPx = 60f, hardness = 0.35f, opacity = 0.85f, flow = 0.6f, smoothing = 0.2f,
             tipShape = TipShape.FLAT, tipAspect = 0.55f, tipFollowsStroke = true,
@@ -309,7 +408,7 @@ val defaultBrushPresets: List<BrushPreset> = listOf(
         ),
     ),
     BrushPreset(
-        "Textura seca",
+        BrushPresetId.DRY_TEXTURE,
         BrushState(
             radiusPx = 45f, hardness = 0.7f, opacity = 1f, flow = 0.8f, smoothing = 0.25f,
             tipShape = TipShape.SQUARE, grainAmount = 0.5f, grainScale = 500f,

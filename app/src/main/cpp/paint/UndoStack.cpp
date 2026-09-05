@@ -40,7 +40,7 @@ void UndoStack::trimToBudget() {
     // Se tiran los pasos mas antiguos, nunca los recientes.
     while (usedBytes_ > budgetBytes_ && records_.size() > 1) {
         usedBytes_ -= records_.front().bytes();
-        records_.erase(records_.begin());
+        records_.pop_front();
         if (cursor_ > 0) --cursor_;
     }
     if (usedBytes_ > budgetBytes_) {

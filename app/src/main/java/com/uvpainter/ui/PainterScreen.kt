@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TouchApp
@@ -46,6 +47,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +65,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.uvpainter.i18n.AppLanguage
+import com.uvpainter.i18n.LocalAppLanguage
+import com.uvpainter.i18n.LocalStrings
+import androidx.compose.runtime.CompositionLocalProvider
 import com.uvpainter.engine.PainterSurfaceView
 import com.uvpainter.engine.PenAction
 import com.uvpainter.engine.QuickGesture
@@ -74,13 +81,39 @@ import com.uvpainter.ui.components.VerticalSlider
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private enum class OpenPanel { NONE, BRUSH, COLOR, LAYERS, VIEW, INPUT, SHAPE, DOCUMENT, PROJECTS }
+private enum class OpenPanel { NONE, BRUSH, FILL, COLOR, LAYERS, VIEW, INPUT, SHAPE, DOCUMENT, PROJECTS }
+
+/**
+ * Una referencia abierta. Lleva identificador propio porque puede haber varias
+ * a la vez y dos fotos distintas pueden decodificarse al mismo bitmap; sin él,
+ * cerrar una cerraría la equivocada.
+ */
+private data class ReferenceItem(val id: Long, val image: ImageBitmap)
 
 @Composable
 fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
+    CompositionLocalProvider(
+        LocalStrings provides controller.language.strings,
+        LocalAppLanguage provides controller.language,
+    ) {
+        PainterScreenContent(controller, defaultModelAsset)
+    }
+}
+
+@Composable
+private fun PainterScreenContent(controller: PainterController, defaultModelAsset: String?) {
     var openPanel by remember { mutableStateOf(OpenPanel.NONE) }
     val context = LocalContext.current
-    var referenceImage by remember { mutableStateOf<ImageBitmap?>(null) }
+    val t = LocalStrings.current
+    // Varias referencias a la vez: casi nunca se dibuja con una sola imagen
+    // delante, y tener que cerrar la anterior para mirar la siguiente obliga a
+    // volver a buscarla en el disco cada vez.
+    val referenceImages = remember { mutableStateListOf<ReferenceItem>() }
+    var nextReferenceId by remember { mutableStateOf(0L) }
+
+    // El panel de capas es el único que cuesta dinero tenerlo abierto: sus
+    // miniaturas se leen de la GPU. El controlador necesita saberlo.
+    LaunchedEffect(openPanel) { controller.setLayersPanelVisible(openPanel == OpenPanel.LAYERS) }
 
     val modelPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -91,18 +124,18 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
     ) { uri -> uri?.let { controller.importTextureToActiveLayer(it) } }
 
     val referencePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            referenceImage = runCatching {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    android.graphics.BitmapFactory.decodeStream(stream)?.asImageBitmap()
-                }
-            }.getOrNull()
-            if (referenceImage == null) {
-                controller.statusMessage = "No se pudo abrir la imagen de referencia"
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        var failed = false
+        uris.forEach { uri ->
+            val image = decodeReference(context, uri)
+            if (image == null) {
+                failed = true
+            } else {
+                referenceImages.add(ReferenceItem(nextReferenceId++, image))
             }
         }
+        if (failed) controller.statusMessage = t.status.referenceOpenFailed
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -125,11 +158,17 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
                     onFillRequested = { x, y -> controller.fillAt(x, y) }
                     onPickRequested = { x, y -> controller.pickColorAt(x.toInt(), y.toInt()) }
                     onPalmRejected = { controller.notePalmRejected() }
+                    // Tocar el lienzo cierra lo que hubiera abierto. Es lo que
+                    // se espera de un menú flotante, y evita tener que volver al
+                    // botón exacto que lo abrió para quitarlo de en medio.
+                    onViewportTouch = { openPanel = OpenPanel.NONE }
                 }
             },
             update = { view ->
                 val input = controller.input
                 view.navigationMinFingers = input.navigationMinFingers
+                view.zoomToPinchCenter = input.zoomToPinchCenter
+                view.twoFingerPan = input.twoFingerPan
                 view.stylusOnlyMode = input.stylusOnlyMode
                 view.palmSizeRejection = input.palmSizeRejection
                 view.palmTouchMajorMm = input.palmTouchMajorMm
@@ -153,6 +192,7 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
                 onPanelToggle = { panel ->
                     openPanel = if (openPanel == panel) OpenPanel.NONE else panel
                 },
+                onPickReference = { referencePicker.launch(arrayOf("image/*")) },
             )
             PanelHost(
                 controller = controller,
@@ -161,21 +201,25 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
                     modelPicker.launch(arrayOf("application/octet-stream", "model/*", "*/*"))
                 },
                 onImportImage = { imagePicker.launch(arrayOf("image/*")) },
-                onPickReference = { referencePicker.launch(arrayOf("image/*")) },
             )
         } else {
             MinimalRail(controller)
         }
 
-        referenceImage?.let { image ->
-            ReferencePanel(
-                image = image,
-                onClose = { referenceImage = null },
-                onPickColor = { color ->
-                    controller.setColor(color)
-                    controller.commitColor(color)
-                },
-            )
+        // Cada referencia nace un poco más abajo y a la derecha que la anterior:
+        // apiladas en el mismo sitio parecerían una sola.
+        referenceImages.forEachIndexed { index, item ->
+            key(item.id) {
+                ReferencePanel(
+                    image = item.image,
+                    startOffset = index % 6,
+                    onClose = { referenceImages.removeAll { it.id == item.id } },
+                    onPickColor = { color ->
+                        controller.setColor(color)
+                        controller.commitColor(color)
+                    },
+                )
+            }
         }
 
         if (controller.showFps) FpsOverlay(controller)
@@ -198,6 +242,7 @@ fun PainterScreen(controller: PainterController, defaultModelAsset: String?) {
 // ---------------------------------------------------------------------------
 @Composable
 private fun BoxScope.LeftRail(controller: PainterController) {
+    val t = LocalStrings.current
     Column(
         modifier = Modifier
             .align(Alignment.CenterStart)
@@ -208,7 +253,7 @@ private fun BoxScope.LeftRail(controller: PainterController) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         RailSlider(
-            caption = "TAM",
+            caption = t.tool.railSize,
             readout = "${controller.brush.radiusPx.roundToInt()}",
             value = controller.brush.radiusPx,
             valueRange = 1f..300f,
@@ -216,7 +261,7 @@ private fun BoxScope.LeftRail(controller: PainterController) {
         )
         Spacer(modifier = Modifier.height(14.dp))
         RailSlider(
-            caption = "OPA",
+            caption = t.tool.railOpacity,
             readout = "${(controller.brush.opacity * 100).roundToInt()}",
             value = controller.brush.opacity,
             valueRange = 0f..1f,
@@ -227,7 +272,7 @@ private fun BoxScope.LeftRail(controller: PainterController) {
         if (controller.brush.stabilizerRadiusPx > 0.5f && controller.tool == Tool.BRUSH) {
             Spacer(modifier = Modifier.height(14.dp))
             RailSlider(
-                caption = "REG",
+                caption = t.tool.railStabilizer,
                 readout = "${controller.brush.stabilizerRadiusPx.roundToInt()}",
                 value = controller.brush.stabilizerRadiusPx,
                 valueRange = 4f..120f,
@@ -274,6 +319,7 @@ private fun RailSlider(
 /** Carril reducido del modo pantalla completa, al estilo Sketchbook. */
 @Composable
 private fun BoxScope.MinimalRail(controller: PainterController) {
+    val t = LocalStrings.current
     Column(
         modifier = Modifier
             .align(Alignment.CenterStart)
@@ -293,10 +339,10 @@ private fun BoxScope.MinimalRail(controller: PainterController) {
         Spacer(modifier = Modifier.height(8.dp))
         ColorSwatch(color = controller.brush.color, modifier = Modifier.size(24.dp))
         Spacer(modifier = Modifier.height(8.dp))
-        ToolIcon(Icons.Filled.Undo, "Deshacer", enabled = controller.canUndo, compact = true) {
+        ToolIcon(Icons.Filled.Undo, t.tool.undo, enabled = controller.canUndo, compact = true) {
             controller.undo()
         }
-        ToolIcon(Icons.Filled.FullscreenExit, "Mostrar interfaz", compact = true) {
+        ToolIcon(Icons.Filled.FullscreenExit, t.tool.showUi, compact = true) {
             controller.uiVisible = true
         }
     }
@@ -310,7 +356,12 @@ private fun BoxScope.TopToolbar(
     controller: PainterController,
     openPanel: OpenPanel,
     onPanelToggle: (OpenPanel) -> Unit,
+    onPickReference: () -> Unit,
 ) {
+    val t = LocalStrings.current
+    // Las herramientas que no traen panel propio cierran el que hubiera: coger
+    // la goma con el panel del pincel abierto dejaba el panel ahí estorbando.
+    val closePanels = { onPanelToggle(OpenPanel.NONE) }
     Row(
         modifier = Modifier
             .align(Alignment.TopEnd)
@@ -321,40 +372,45 @@ private fun BoxScope.TopToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        ToolIcon(Icons.Filled.Undo, "Deshacer", enabled = controller.canUndo) { controller.undo() }
-        ToolIcon(Icons.Filled.Redo, "Rehacer", enabled = controller.canRedo) { controller.redo() }
+        ToolIcon(Icons.Filled.Undo, t.tool.undo, enabled = controller.canUndo) { controller.undo() }
+        ToolIcon(Icons.Filled.Redo, t.tool.redo, enabled = controller.canRedo) { controller.redo() }
 
         Spacer(modifier = Modifier.width(6.dp))
 
         // Herramientas del lapiz.
-        ToolIcon(Icons.Filled.Brush, "Pincel", selected = controller.tool == Tool.BRUSH) {
+        ToolIcon(Icons.Filled.Brush, t.tool.brush, selected = controller.tool == Tool.BRUSH) {
             controller.changeTool(Tool.BRUSH)
             onPanelToggle(OpenPanel.BRUSH)
         }
-        ToolIcon(UvpIcons.Eraser, "Borrador", selected = controller.tool == Tool.ERASER) {
+        ToolIcon(UvpIcons.Eraser, t.tool.eraser, selected = controller.tool == Tool.ERASER) {
             controller.changeTool(Tool.ERASER)
+            closePanels()
         }
-        ToolIcon(Icons.Filled.FormatColorFill, "Bote", selected = controller.tool == Tool.FILL) {
+        ToolIcon(Icons.Filled.FormatColorFill, t.tool.fill, selected = controller.tool == Tool.FILL) {
             controller.changeTool(Tool.FILL)
-            onPanelToggle(OpenPanel.BRUSH)
+            onPanelToggle(OpenPanel.FILL)
         }
-        ToolIcon(Icons.Filled.Colorize, "Cuentagotas", selected = controller.tool == Tool.PICKER) {
+        ToolIcon(Icons.Filled.Colorize, t.tool.picker, selected = controller.tool == Tool.PICKER) {
             controller.changeTool(Tool.PICKER)
+            closePanels()
         }
         // El regulador se enciende y se apaga a media lamina, asi que vive en la
         // barra y no dentro de un panel. Solo con el pincel: el bote y el
-        // cuentagotas no trazan nada, asi que ahi no significa nada.
+        // cuentagotas no trazan nada, asi que ahi no significa nada. El
+        // interruptor sigue a [stabilizerActive] y no a la longitud guardada,
+        // que se conserva para cuando se vuelva al pincel.
         ToolIcon(
             Icons.Filled.Gesture,
-            "Regular trazo",
-            selected = controller.brush.stabilizerRadiusPx > 0.5f,
+            t.tool.stabilizer,
+            selected = controller.stabilizerActive,
             enabled = controller.tool == Tool.BRUSH,
         ) {
             controller.setStabilizerEnabled(controller.brush.stabilizerRadiusPx <= 0.5f)
+            closePanels()
         }
         ToolIcon(
             Icons.Filled.Category,
-            "Formas y límites",
+            t.tool.shapesAndBounds,
             selected = controller.tool == Tool.SHAPE || controller.tool == Tool.BOUNDARY,
         ) {
             if (controller.tool != Tool.SHAPE && controller.tool != Tool.BOUNDARY) {
@@ -374,23 +430,35 @@ private fun BoxScope.TopToolbar(
             )
         }
 
-        ToolIcon(Icons.Filled.Layers, "Capas", selected = openPanel == OpenPanel.LAYERS) {
+        ToolIcon(Icons.Filled.Layers, t.tool.layers, selected = openPanel == OpenPanel.LAYERS) {
             onPanelToggle(OpenPanel.LAYERS)
         }
-        ToolIcon(Icons.Filled.Palette, "Vista", selected = openPanel == OpenPanel.VIEW) {
+        ToolIcon(Icons.Filled.Palette, t.tool.view, selected = openPanel == OpenPanel.VIEW) {
             onPanelToggle(OpenPanel.VIEW)
         }
-        ToolIcon(Icons.Filled.TouchApp, "Lápiz y palma", selected = openPanel == OpenPanel.INPUT) {
+        ToolIcon(Icons.Filled.TouchApp, t.tool.penAndPalm, selected = openPanel == OpenPanel.INPUT) {
             onPanelToggle(OpenPanel.INPUT)
         }
-        ToolIcon(Icons.Filled.CenterFocusStrong, "Encuadrar") { controller.resetView() }
-        ToolIcon(Icons.Filled.Folder, "Proyectos", selected = openPanel == OpenPanel.PROJECTS) {
+        // Las referencias se abren desde aquí y no desde el panel de ajustes:
+        // se consultan a media lámina y se abren de varias en varias.
+        ToolIcon(Icons.Filled.PhotoLibrary, t.tool.reference) {
+            closePanels()
+            onPickReference()
+        }
+        ToolIcon(Icons.Filled.CenterFocusStrong, t.tool.frame) {
+            controller.resetView()
+            closePanels()
+        }
+        ToolIcon(Icons.Filled.Folder, t.tool.projects, selected = openPanel == OpenPanel.PROJECTS) {
             onPanelToggle(OpenPanel.PROJECTS)
         }
-        ToolIcon(Icons.Filled.Settings, "Documento", selected = openPanel == OpenPanel.DOCUMENT) {
+        ToolIcon(Icons.Filled.Settings, t.tool.document, selected = openPanel == OpenPanel.DOCUMENT) {
             onPanelToggle(OpenPanel.DOCUMENT)
         }
-        ToolIcon(Icons.Filled.Fullscreen, "Pantalla completa") { controller.uiVisible = false }
+        ToolIcon(Icons.Filled.Fullscreen, t.tool.fullscreen) {
+            closePanels()
+            controller.uiVisible = false
+        }
     }
 }
 
@@ -436,7 +504,6 @@ private fun BoxScope.PanelHost(
     openPanel: OpenPanel,
     onImportModel: () -> Unit,
     onImportImage: () -> Unit,
-    onPickReference: () -> Unit,
 ) {
     AnimatedVisibility(
         visible = openPanel != OpenPanel.NONE,
@@ -446,16 +513,13 @@ private fun BoxScope.PanelHost(
     ) {
         when (openPanel) {
             OpenPanel.BRUSH -> BrushPanel(controller)
+            OpenPanel.FILL -> FillPanel(controller)
             OpenPanel.COLOR -> ColorPanel(controller)
             OpenPanel.LAYERS -> LayersPanel(controller)
             OpenPanel.VIEW -> ViewPanel(controller)
             OpenPanel.INPUT -> InputPanel(controller)
             OpenPanel.SHAPE -> ShapePanel(controller)
-            OpenPanel.DOCUMENT ->
-                DocumentPanel(
-                    controller, onImportModel, onImportImage,
-                    onPickReference = onPickReference,
-                )
+            OpenPanel.DOCUMENT -> DocumentPanel(controller, onImportModel, onImportImage)
             OpenPanel.PROJECTS -> ProjectsPanel(controller)
             OpenPanel.NONE -> Unit
         }
@@ -488,6 +552,32 @@ private fun BoxScope.FpsOverlay(controller: PainterController) {
         )
     }
 }
+
+/**
+ * Abre una imagen de referencia y la deja en memoria a un tamaño razonable.
+ *
+ * Se reduce al decodificar porque ahora puede haber varias abiertas y las fotos
+ * de una cámara moderna pasan de los 50 MP: sin esto, tres referencias se comen
+ * la memoria de la app y se la quitan al atlas, que es lo que de verdad importa.
+ * Mil seiscientos píxeles de lado dan de sobra para ver la referencia ampliada.
+ */
+private fun decodeReference(context: android.content.Context, uri: android.net.Uri): ImageBitmap? =
+    runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+        }
+        val largestSide = maxOf(bounds.outWidth, bounds.outHeight)
+        var sample = 1
+        while (largestSide / sample > MAX_REFERENCE_SIDE) sample *= 2
+
+        val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            android.graphics.BitmapFactory.decodeStream(stream, null, options)?.asImageBitmap()
+        }
+    }.getOrNull()
+
+private const val MAX_REFERENCE_SIDE = 1600
 
 @Composable
 private fun BoxScope.StatusBar(controller: PainterController) {

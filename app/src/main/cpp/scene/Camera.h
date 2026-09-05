@@ -14,6 +14,11 @@ public:
     void orbit(float deltaYawRad, float deltaPitchRad);
     void pan(float dxPixels, float dyPixels);
     void dolly(float scaleFactor);
+    // Zoom dirigido a un punto de la pantalla, como la rueda del raton en un
+    // escritorio: lo que hay bajo ese punto se queda donde esta y todo lo demas
+    // se abre a su alrededor. Las coordenadas van en pixeles de MotionEvent
+    // (origen arriba a la izquierda).
+    void dollyAt(float scaleFactor, float screenX, float screenY);
     void roll(float deltaRad);
     void resetRoll();
 

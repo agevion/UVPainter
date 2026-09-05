@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.uvpainter.i18n.LocalStrings
 import kotlin.math.roundToInt
 
 private fun Color.toHsv(): Triple<Float, Float, Float> {
@@ -75,6 +76,7 @@ fun ColorPicker(
     onToggleFavorite: (Color) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val t = LocalStrings.current
     val (initialHue, initialSat, initialValue) = remember(Unit) { color.toHsv() }
     var hue by remember { mutableFloatStateOf(initialHue) }
     var saturation by remember { mutableFloatStateOf(initialSat) }
@@ -207,7 +209,7 @@ fun ColorPicker(
                     .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
                 Text(
-                    if (isFavorite(current)) "★ Favorito" else "☆ Favorito",
+                    if (isFavorite(current)) t.color.favoriteOn else t.color.favoriteOff,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -223,10 +225,10 @@ fun ColorPicker(
         }
 
         if (favoriteColors.isNotEmpty()) {
-            SwatchRow("Favoritos", favoriteColors) { applySwatch(it) }
+            SwatchRow(t.color.favorites, favoriteColors) { applySwatch(it) }
         }
         if (recentColors.isNotEmpty()) {
-            SwatchRow("Recientes", recentColors) { applySwatch(it) }
+            SwatchRow(t.color.recents, recentColors) { applySwatch(it) }
         }
     }
 }

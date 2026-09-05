@@ -43,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.uvpainter.i18n.LocalStrings
 import kotlin.math.roundToInt
 
 /**
@@ -57,13 +58,16 @@ fun ReferencePanel(
     onClose: () -> Unit,
     onPickColor: (Color) -> Unit,
     modifier: Modifier = Modifier,
+    /** Escalón de salida, para que varias referencias abiertas no se tapen. */
+    startOffset: Int = 0,
 ) {
-    var offsetX by remember { mutableFloatStateOf(60f) }
-    var offsetY by remember { mutableFloatStateOf(120f) }
+    var offsetX by remember { mutableFloatStateOf(60f + startOffset * 34f) }
+    var offsetY by remember { mutableFloatStateOf(120f + startOffset * 34f) }
     var panelWidth by remember { mutableFloatStateOf(360f) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var imageBoxSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var pickerEnabled by remember { mutableStateOf(true) }
+    val t = LocalStrings.current
 
     val androidBitmap = remember(image) { image.asAndroidBitmap() }
 
@@ -94,19 +98,19 @@ fun ReferencePanel(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Filled.DragIndicator,
-                    "Mover",
+                    t.reference.move,
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Referencia",
+                    t.reference.title,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.padding(start = 6.dp),
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (pickerEnabled) "Cuentagotas" else "Solo ver",
+                    if (pickerEnabled) t.reference.picker else t.reference.viewOnly,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (pickerEnabled) {
                         MaterialTheme.colorScheme.primary
@@ -128,7 +132,7 @@ fun ReferencePanel(
                         .pointerInput(Unit) { detectTapGestures { onClose() } },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Close, "Cerrar", modifier = Modifier.size(15.dp))
+                    Icon(Icons.Filled.Close, t.reference.close, modifier = Modifier.size(15.dp))
                 }
             }
         }
@@ -157,7 +161,7 @@ fun ReferencePanel(
         ) {
             Image(
                 bitmap = image,
-                contentDescription = "Imagen de referencia",
+                contentDescription = t.reference.imageDescription,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = zoom, scaleY = zoom),
             )

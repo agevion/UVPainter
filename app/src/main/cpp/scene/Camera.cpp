@@ -48,6 +48,33 @@ void Camera::dolly(float scaleFactor) {
     farPlane_ = distance_ + sceneRadius_ * 12.0f;
 }
 
+void Camera::dollyAt(float scaleFactor, float screenX, float screenY) {
+    if (scaleFactor <= 0.0f) return;
+
+    // El punto del pellizco, llevado al plano que pasa por el objetivo: es el
+    // que tiene que quedarse quieto.
+    const float unitsPerPixel = worldUnitsPerPixel();
+    const Vec3 fwd = forward();
+    const Vec3 right = normalize(cross(fwd, upVector()));
+    const Vec3 up = cross(right, fwd);
+    const float dx = screenX - static_cast<float>(viewportW_) * 0.5f;
+    const float dy = screenY - static_cast<float>(viewportH_) * 0.5f;
+    // La Y del dedo baja y la del mundo sube, de ahi el signo.
+    const Vec3 pivot = right * (dx * unitsPerPixel) - up * (dy * unitsPerPixel);
+
+    const float before = distance_;
+    dolly(scaleFactor);
+    // El factor que de verdad se aplico: dolly() recorta contra los topes de
+    // acercamiento, y usar el pedido movería el objetivo sin que la distancia
+    // haya cambiado, que se nota como un tiron lateral al llegar al tope.
+    const float applied = before / std::max(distance_, 1e-6f);
+    if (std::fabs(applied - 1.0f) < 1e-5f) return;
+
+    // El objetivo se desplaza hacia el pellizco justo lo que hace falta para
+    // que ese punto vuelva a caer donde estaba en pantalla.
+    target_ = target_ + pivot * (1.0f - 1.0f / applied);
+}
+
 void Camera::roll(float deltaRad) { roll_ += deltaRad; }
 
 void Camera::resetRoll() { roll_ = 0.0f; }

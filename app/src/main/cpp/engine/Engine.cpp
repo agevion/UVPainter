@@ -1,11 +1,14 @@
 #include "engine/Engine.h"
 
 #include <android/native_window.h>
+#include <sys/resource.h>
 #include <zlib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 #include "core/Log.h"
 #include "io/ModelLoader.h"
@@ -37,15 +40,70 @@ bool writeString(FILE* f, const std::string& s) {
     return writeU32(f, static_cast<uint32_t>(s.size())) && writeRaw(f, s.data(), s.size());
 }
 
-bool writeBlob(FILE* f, const uint8_t* data, size_t size) {
-    if (size == 0) return writeU64(f, 0) && writeU64(f, 0);
+/// Comprime un bloque. Separado de la escritura porque comprimir es lo unico
+/// caro de guardar, y separandolo se puede repartir entre varios hilos.
+bool packBlob(const uint8_t* data, size_t size, std::vector<uint8_t>& out) {
+    out.clear();
+    if (size == 0) return true;
     uLongf packedSize = compressBound(static_cast<uLong>(size));
-    std::vector<uint8_t> packed(packedSize);
-    if (compress2(packed.data(), &packedSize, data, static_cast<uLong>(size), 6) != Z_OK) {
+    out.resize(packedSize);
+    if (compress2(out.data(), &packedSize, data, static_cast<uLong>(size), 6) != Z_OK) {
+        out.clear();
         return false;
     }
-    return writeU64(f, size) && writeU64(f, packedSize) &&
-           writeRaw(f, packed.data(), packedSize);
+    out.resize(packedSize);
+    return true;
+}
+
+/// Escribe un bloque ya comprimido. `rawSize` es lo que ocupaba sin comprimir,
+/// que es lo que necesita la lectura para reservar sitio.
+bool writePacked(FILE* f, size_t rawSize, const std::vector<uint8_t>& packed) {
+    if (rawSize == 0) return writeU64(f, 0) && writeU64(f, 0);
+    return writeU64(f, rawSize) && writeU64(f, packed.size()) &&
+           writeRaw(f, packed.data(), packed.size());
+}
+
+/// Un trozo por comprimir y donde dejar el resultado.
+struct PackJob {
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    std::vector<uint8_t>* out = nullptr;
+};
+
+/**
+ * Comprime todos los trozos a la vez, uno por hilo.
+ *
+ * Los hilos se bajan a prioridad de fondo a proposito: en un movil eso los
+ * manda a los nucleos pequeños y deja los grandes para quien esta dibujando.
+ * Guardar tarda algo mas y no se nota nada, que es justo lo que se busca.
+ */
+bool packAll(std::vector<PackJob>& jobs) {
+    if (jobs.empty()) return true;
+
+    std::atomic<size_t> next{0};
+    std::atomic<bool> ok{true};
+    auto run = [&jobs, &next, &ok]() {
+        setpriority(PRIO_PROCESS, 0, 10);  // THREAD_PRIORITY_BACKGROUND
+        for (;;) {
+            const size_t index = next.fetch_add(1);
+            if (index >= jobs.size()) return;
+            const PackJob& job = jobs[index];
+            if (!packBlob(job.data, job.size, *job.out)) ok.store(false);
+        }
+    };
+
+    unsigned int cores = std::thread::hardware_concurrency();
+    if (cores == 0) cores = 2;
+    // Uno menos que nucleos hay: el que falta es el que sigue dibujando.
+    const size_t threads =
+        std::min<size_t>(jobs.size(), std::max<unsigned int>(cores - 1u, 1u));
+
+    std::vector<std::thread> pool;
+    pool.reserve(threads - 1);
+    for (size_t i = 1; i < threads; ++i) pool.emplace_back(run);
+    run();
+    for (std::thread& t : pool) t.join();
+    return ok.load();
 }
 
 bool readRaw(FILE* f, void* data, size_t size) {
@@ -86,7 +144,12 @@ bool readBlob(FILE* f, std::vector<uint8_t>& out) {
 
 }  // namespace
 
-Engine::~Engine() { onSurfaceDestroyed(); }
+Engine::~Engine() {
+    // El hilo que escribe el punto de control sigue leyendo del motor: hay que
+    // esperarlo antes de que estos miembros dejen de existir.
+    if (checkpoint_.worker.joinable()) checkpoint_.worker.join();
+    onSurfaceDestroyed();
+}
 
 // ---------------------------------------------------------------------------
 // Superficie
@@ -153,6 +216,11 @@ void Engine::onSurfaceChanged(int width, int height) {
 
 void Engine::onSurfaceDestroyed() {
     if (!resourcesReady_ && !context_.valid()) return;
+
+    // Un punto de control a medio leer se queda sin texturas de las que leer, y
+    // sin frames que lo empujen: se corta aqui o bloquearia todos los
+    // siguientes. Lo que ya estuviera escribiendose no toca GL y puede acabar.
+    if (checkpoint_.stage == Checkpoint::Stage::Reading) failCheckpoint("err.engine_not_ready");
 
     // Lo pintado solo existe en texturas, asi que hay que bajarlo a CPU AHORA,
     // con el contexto todavia vivo. Un segundo despues ya no habria nada que
@@ -311,6 +379,8 @@ void Engine::rebuildOrientedMesh(bool frameCamera) {
 
 bool Engine::createDocument(int resolution) {
     if (!resourcesReady_) return false;
+    // El documento que se estaba leyendo a plazos deja de existir aqui.
+    if (checkpoint_.stage == Checkpoint::Stage::Reading) failCheckpoint("");
     if (!document_.create(resolution)) return false;
     paintEngine_.setDocument(&document_);
     paintEngine_.setMesh(&mesh_);
@@ -321,15 +391,26 @@ bool Engine::createDocument(int resolution) {
 // ---------------------------------------------------------------------------
 // Proyecto
 // ---------------------------------------------------------------------------
-bool Engine::saveProject(const std::string& path, std::string& error) {
-    if (!document_.valid()) {
-        error = "No hay nada que guardar todavia";
-        return false;
-    }
+namespace {
 
-    DocumentState state;
-    if (!document_.captureState(state)) {
-        error = "No se pudieron leer las capas";
+/**
+ * Comprime y escribe el .uvp. No toca GL ni el motor: todo lo que necesita
+ * viaja dentro de [ProjectPayload], asi que puede correr en el hilo que sea.
+ */
+bool writeProject(const std::string& path, ProjectPayload& payload, std::string& error) {
+    // La compresion es lo unico caro que queda, y va repartida entre nucleos.
+    std::vector<PackJob> jobs;
+    jobs.reserve(payload.state.layers.size() + 2u);
+    jobs.push_back({payload.modelBytes.data(), payload.modelBytes.size(), &payload.packedModel});
+    payload.packedLayers.resize(payload.state.layers.size());
+    for (size_t i = 0; i < payload.state.layers.size(); ++i) {
+        jobs.push_back({payload.state.layers[i].pixels.data(),
+                        payload.state.layers[i].pixels.size(), &payload.packedLayers[i]});
+    }
+    jobs.push_back({payload.state.boundary.data(), payload.state.boundary.size(),
+                    &payload.packedBoundary});
+    if (!packAll(jobs)) {
+        error = "err.project_write_failed";
         return false;
     }
 
@@ -338,25 +419,27 @@ bool Engine::saveProject(const std::string& path, std::string& error) {
     const std::string temp = path + ".tmp";
     FILE* f = std::fopen(temp.c_str(), "wb");
     if (f == nullptr) {
-        error = "No se pudo escribir en " + path;
+        error = "err.write_failed|" + path;
         return false;
     }
 
+    const DocumentState& state = payload.state;
     bool ok = writeRaw(f, kProjectMagic, sizeof(kProjectMagic));
     ok = ok && writeU32(f, kProjectVersion);
     ok = ok && writeU32(f, static_cast<uint32_t>(state.resolution));
     ok = ok && writeU32(f, static_cast<uint32_t>(state.activeIndex));
     ok = ok && writeU32(f, static_cast<uint32_t>(state.nextLayerId));
     ok = ok && writeU32(f, static_cast<uint32_t>(state.layers.size()));
-    ok = ok && writeU32(f, static_cast<uint32_t>(upAxis_));
-    ok = ok && writeU32(f, flipUp_ ? 1u : 0u);
-    ok = ok && writeU32(f, static_cast<uint32_t>(quarterTurns_));
-    ok = ok && writeString(f, modelExt_);
-    ok = ok && writeString(f, modelName_);
-    ok = ok && writeBlob(f, modelBytes_.data(), modelBytes_.size());
+    ok = ok && writeU32(f, static_cast<uint32_t>(payload.upAxis));
+    ok = ok && writeU32(f, payload.flipUp ? 1u : 0u);
+    ok = ok && writeU32(f, static_cast<uint32_t>(payload.quarterTurns));
+    ok = ok && writeString(f, payload.modelExt);
+    ok = ok && writeString(f, payload.modelName);
+    ok = ok && writePacked(f, payload.modelBytes.size(), payload.packedModel);
 
-    for (const LayerState& layer : state.layers) {
+    for (size_t i = 0; i < state.layers.size(); ++i) {
         if (!ok) break;
+        const LayerState& layer = state.layers[i];
         ok = ok && writeString(f, layer.info.name);
         ok = ok && writeU32(f, static_cast<uint32_t>(layer.id));
         ok = ok && writeF32(f, layer.info.opacity);
@@ -365,22 +448,22 @@ bool Engine::saveProject(const std::string& path, std::string& error) {
                                (layer.info.alphaLock ? 4u : 0u) |
                                (layer.info.clipToBelow ? 8u : 0u);
         ok = ok && writeU32(f, flags);
-        ok = ok && writeBlob(f, layer.pixels.data(), layer.pixels.size());
+        ok = ok && writePacked(f, layer.pixels.size(), payload.packedLayers[i]);
     }
 
-    ok = ok && writeBlob(f, state.boundary.data(), state.boundary.size());
+    ok = ok && writePacked(f, state.boundary.size(), payload.packedBoundary);
     ok = ok && std::fflush(f) == 0;
     std::fclose(f);
 
     if (!ok) {
         std::remove(temp.c_str());
-        error = "Fallo escribiendo el proyecto (¿espacio libre?)";
+        error = "err.project_write_failed";
         return false;
     }
     std::remove(path.c_str());
     if (std::rename(temp.c_str(), path.c_str()) != 0) {
         std::remove(temp.c_str());
-        error = "No se pudo cerrar el archivo del proyecto";
+        error = "err.project_close_failed";
         return false;
     }
 
@@ -389,15 +472,227 @@ bool Engine::saveProject(const std::string& path, std::string& error) {
     return true;
 }
 
-bool Engine::loadProject(const std::string& path, std::string& error) {
-    if (!resourcesReady_) {
-        error = "El motor todavia no esta listo";
+}  // namespace
+
+void Engine::fillPayloadMeta(ProjectPayload& payload) const {
+    payload.upAxis = upAxis_;
+    payload.flipUp = flipUp_;
+    payload.quarterTurns = quarterTurns_;
+    payload.modelExt = modelExt_;
+    payload.modelName = modelName_;
+    // Copia propia del modelo: el hilo que escribe vive por su cuenta y aqui
+    // se puede estar cargando otro mientras tanto.
+    payload.modelBytes = modelBytes_;
+}
+
+bool Engine::saveProject(const std::string& path, std::string& error) {
+    if (!document_.valid()) {
+        error = "err.nothing_to_save";
         return false;
     }
 
+    // Guardar de una pieza y un punto de control a la vez escribirian en el
+    // mismo temporal, asi que aqui se espera a que el de fondo termine. Es la
+    // unica espera que se paga, y solo al guardar a mano o al salir.
+    if (checkpoint_.stage == Checkpoint::Stage::Reading) failCheckpoint("");
+    if (checkpoint_.worker.joinable()) checkpoint_.worker.join();
+
+    ProjectPayload payload;
+    if (!document_.captureState(payload.state)) {
+        error = "err.layers_unreadable";
+        return false;
+    }
+    fillPayloadMeta(payload);
+    return writeProject(path, payload, error);
+}
+
+// ---------------------------------------------------------------------------
+// Punto de control en segundo plano
+//
+// Guardar de una pieza planta el hilo de render: leer el atlas de cada capa y
+// comprimirlo son un par de segundos con el lapiz en la mano, y el
+// autoguardado los cobraba a mitad de trazo. Esto lo hace a plazos: una capa
+// por frame y con lectura sin espera (la GPU sirve la copia por su cuenta), y
+// en cuanto estan todos los bytes, un hilo aparte comprime y escribe.
+//
+// Las capas se leen en frames distintos, asi que un punto de control cogido
+// mientras se pinta puede llevar unos milisegundos de desfase entre una capa y
+// la siguiente. Para un guardado automatico es lo de menos: lo que importa es
+// no perder el trabajo, y quien guarda a mano usa la ruta de una pieza.
+// ---------------------------------------------------------------------------
+bool Engine::beginCheckpoint(const std::string& path) {
+    if (!document_.valid() || path.empty()) return false;
+    // Uno cada vez. Si el anterior sigue escribiendo, el que llega se descarta:
+    // el siguiente intento llegara solo, y encolarlos solo acumularia trabajo.
+    if (checkpoint_.stage == Checkpoint::Stage::Reading ||
+        checkpoint_.stage == Checkpoint::Stage::Writing) {
+        return false;
+    }
+    if (checkpoint_.worker.joinable()) checkpoint_.worker.join();
+    if (document_.readbackPending()) return false;
+
+    checkpoint_.path = path;
+    checkpoint_.error.clear();
+    checkpoint_.finished.store(false);
+    checkpoint_.ok.store(false);
+    checkpoint_.payload = ProjectPayload{};
+    fillPayloadMeta(checkpoint_.payload);
+
+    // Los metadatos de las capas se copian ahora, de una vez; los pixeles van
+    // llegando frame a frame.
+    DocumentState& state = checkpoint_.payload.state;
+    state.resolution = document_.resolution();
+    state.activeIndex = document_.activeIndex();
+    state.nextLayerId = document_.nextLayerId();
+    state.layers.resize(static_cast<size_t>(document_.layerCount()));
+    for (int i = 0; i < document_.layerCount(); ++i) {
+        const Layer* layer = document_.layerAt(i);
+        if (layer == nullptr) return false;
+        state.layers[static_cast<size_t>(i)].info = layer->info;
+        state.layers[static_cast<size_t>(i)].id = layer->id;
+    }
+
+    checkpoint_.layerIndex = 0;
+    checkpoint_.readingBoundary = false;
+    checkpoint_.boundaryRgba.clear();
+    checkpoint_.stage = Checkpoint::Stage::Reading;
+    return true;
+}
+
+void Engine::pollCheckpoint() {
+    switch (checkpoint_.stage) {
+        case Checkpoint::Stage::Reading: {
+            // Un solo paso por frame: o se pide una lectura, o se recoge la que
+            // ya estaba servida. Nunca las dos, para que ningun frame pague de
+            // golpe la copia de 16 MB y la peticion siguiente.
+            if (document_.readbackPending()) {
+                if (!document_.readbackReady()) return;
+                if (checkpoint_.readingBoundary) {
+                    if (!document_.finishReadback(checkpoint_.boundaryRgba)) {
+                        failCheckpoint("err.layers_unreadable");
+                        return;
+                    }
+                    startCheckpointWorker();
+                } else {
+                    const size_t index = static_cast<size_t>(checkpoint_.layerIndex);
+                    if (index >= checkpoint_.payload.state.layers.size() ||
+                        !document_.finishReadback(
+                            checkpoint_.payload.state.layers[index].pixels)) {
+                        failCheckpoint("err.layers_unreadable");
+                        return;
+                    }
+                    ++checkpoint_.layerIndex;
+                }
+                return;
+            }
+
+            // La pila de capas puede cambiar mientras se lee: añadir, borrar,
+            // reordenar o cambiar la resolucion del atlas. Si pasa, este punto
+            // de control ya no cuadra y se tira sin ruido; el siguiente lo coge
+            // todo bien y no se pierde nada, porque el documento sigue marcado
+            // como pendiente de guardar.
+            const DocumentState& state = checkpoint_.payload.state;
+            if (document_.resolution() != state.resolution ||
+                document_.layerCount() != static_cast<int>(state.layers.size())) {
+                failCheckpoint("");
+                return;
+            }
+            if (checkpoint_.layerIndex < document_.layerCount()) {
+                const Layer* layer = document_.layerAt(checkpoint_.layerIndex);
+                if (layer == nullptr ||
+                    layer->id != state.layers[static_cast<size_t>(checkpoint_.layerIndex)].id) {
+                    failCheckpoint("");
+                    return;
+                }
+                if (!document_.beginReadback(layer->texture)) {
+                    failCheckpoint("err.layers_unreadable");
+                }
+                return;
+            }
+            if (document_.hasBoundaryContent() && !checkpoint_.readingBoundary) {
+                checkpoint_.readingBoundary = true;
+                if (!document_.beginReadback(document_.boundaryMask())) {
+                    failCheckpoint("err.layers_unreadable");
+                }
+                return;
+            }
+            startCheckpointWorker();
+            return;
+        }
+        case Checkpoint::Stage::Writing:
+            if (!checkpoint_.finished.load()) return;
+            if (checkpoint_.worker.joinable()) checkpoint_.worker.join();
+            checkpoint_.stage = checkpoint_.ok.load() ? Checkpoint::Stage::Done
+                                                      : Checkpoint::Stage::Failed;
+            // Los pixeles ya no hacen falta y son decenas de megas.
+            checkpoint_.payload = ProjectPayload{};
+            checkpoint_.boundaryRgba.clear();
+            return;
+        default:
+            return;
+    }
+}
+
+void Engine::startCheckpointWorker() {
+    checkpoint_.stage = Checkpoint::Stage::Writing;
+    checkpoint_.finished.store(false);
+    checkpoint_.worker = std::thread([this]() {
+        setpriority(PRIO_PROCESS, 0, 10);  // THREAD_PRIORITY_BACKGROUND
+        // La pared se guarda a un byte por texel; se leyo en cuatro canales
+        // porque es lo unico que garantiza la lectura de vuelta.
+        if (!checkpoint_.boundaryRgba.empty()) {
+            const size_t count = checkpoint_.boundaryRgba.size() / 4u;
+            checkpoint_.payload.state.boundary.resize(count);
+            for (size_t i = 0; i < count; ++i) {
+                checkpoint_.payload.state.boundary[i] = checkpoint_.boundaryRgba[i * 4u];
+            }
+            checkpoint_.boundaryRgba.clear();
+            checkpoint_.boundaryRgba.shrink_to_fit();
+        }
+        std::string error;
+        const bool ok = writeProject(checkpoint_.path, checkpoint_.payload, error);
+        checkpoint_.error = error;
+        checkpoint_.ok.store(ok);
+        checkpoint_.finished.store(true);
+    });
+}
+
+void Engine::failCheckpoint(const char* reason) {
+    checkpoint_.error = reason;
+    checkpoint_.stage = Checkpoint::Stage::Failed;
+    checkpoint_.payload = ProjectPayload{};
+    checkpoint_.boundaryRgba.clear();
+}
+
+int Engine::checkpointStatus() {
+    switch (checkpoint_.stage) {
+        case Checkpoint::Stage::Reading:
+        case Checkpoint::Stage::Writing:
+            return 1;
+        case Checkpoint::Stage::Done:
+            checkpoint_.stage = Checkpoint::Stage::Idle;
+            return 2;
+        case Checkpoint::Stage::Failed:
+            checkpoint_.stage = Checkpoint::Stage::Idle;
+            return 3;
+        case Checkpoint::Stage::Idle:
+            return 0;
+    }
+    return 0;
+}
+
+bool Engine::loadProject(const std::string& path, std::string& error) {
+    if (!resourcesReady_) {
+        error = "err.engine_not_ready";
+        return false;
+    }
+    // Abrir otro proyecto se lleva por delante las capas que se estuvieran
+    // leyendo para el punto de control.
+    if (checkpoint_.stage == Checkpoint::Stage::Reading) failCheckpoint("");
+
     FILE* f = std::fopen(path.c_str(), "rb");
     if (f == nullptr) {
-        error = "No se encontro el proyecto";
+        error = "err.project_not_found";
         return false;
     }
 
@@ -449,7 +744,7 @@ bool Engine::loadProject(const std::string& path, std::string& error) {
     std::fclose(f);
 
     if (!ok) {
-        error = "El archivo de proyecto no es valido o esta incompleto";
+        error = "err.project_invalid";
         return false;
     }
 
@@ -578,6 +873,9 @@ void Engine::handleCommand(const InputCommand& cmd) {
         case InputCommand::Kind::Zoom:
             camera_.dolly(cmd.x);
             break;
+        case InputCommand::Kind::ZoomAt:
+            camera_.dollyAt(cmd.x, cmd.y, cmd.tilt);
+            break;
         case InputCommand::Kind::Roll:
             camera_.roll(cmd.x);
             break;
@@ -601,6 +899,8 @@ bool Engine::drawFrame() {
 
     drainCommands();
     paintEngine_.flush(camera_);
+    // Un paso del punto de control por frame, si es que hay alguno en marcha.
+    pollCheckpoint();
 
     const Texture2D* baseColor = nullptr;
     if (document_.valid()) baseColor = &document_.composite();
@@ -636,13 +936,14 @@ bool Engine::drawFrame() {
 
         // Con el regulador activo el pincel va colgando por detras de la punta,
         // asi que el anillo tiene que ir donde cae la pintura y no donde esta el
-        // lapiz. La cuerda entre los dos es lo que explica ese retraso; sin
-        // dibujarla, el trazo parece que responde mal.
+        // lapiz: es el unico circulo que se dibuja, y en la punta no va nada. La
+        // cuerda entre los dos explica ese retraso, y arranca en el borde del
+        // anillo para no cruzarlo por debajo.
         Vec2 cursorAt = hoverPos_;
         const float rope = paintEngine_.ropeLength();
         if (rope > 0.0f) {
             cursorAt = paintEngine_.paintPosition();
-            renderer_.drawRope(viewportW_, viewportH_, cursorAt, hoverPos_,
+            renderer_.drawRope(viewportW_, viewportH_, cursorAt, hoverPos_, radius,
                                Vec4(color.x, color.y, color.z, 0.55f));
         }
         renderer_.drawBrushCursor(viewportW_, viewportH_, cursorAt, radius, brush_.hardness,

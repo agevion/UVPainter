@@ -9,6 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asImageBitmap
 import com.uvpainter.engine.NativeBridge
 import com.uvpainter.engine.RenderThread
+import com.uvpainter.i18n.AppLanguage
+import com.uvpainter.i18n.Strings
+import com.uvpainter.i18n.translateEngineError
 import com.uvpainter.io.TextureIo
 import java.io.File
 import kotlinx.serialization.json.Json
@@ -99,6 +102,17 @@ class PainterController(private val appContext: Context) {
     var stabilizerMemory by mutableStateOf(24f)
         private set
 
+    /**
+     * Si el regulador de trazo esta actuando ahora mismo.
+     *
+     * No basta con mirar la longitud de cuerda guardada: el regulador es del
+     * pincel y de nadie mas. Con la goma, el bote o el cuentagotas en la mano
+     * esa cuerda no se aplica, y el interruptor de la barra tiene que decir lo
+     * mismo que hace el motor. Ver [pushBrush], que es donde se corta de verdad.
+     */
+    val stabilizerActive: Boolean
+        get() = tool == Tool.BRUSH && paintMode == PaintMode.PAINT && brush.stabilizerRadiusPx > 0.5f
+
     fun setStabilizerEnabled(enabled: Boolean) {
         if (enabled) {
             updateBrush { it.copy(stabilizerRadiusPx = stabilizerMemory.coerceAtLeast(4f)) }
@@ -122,7 +136,7 @@ class PainterController(private val appContext: Context) {
         val now = System.currentTimeMillis()
         if (now - lastPalmNoticeMs < 2500) return
         lastPalmNoticeMs = now
-        statusMessage = "Apoyo de la mano descartado"
+        statusMessage = txt.status.palmRejected
     }
 
     private var lastPalmNoticeMs = 0L
@@ -163,6 +177,31 @@ class PainterController(private val appContext: Context) {
     var tool by mutableStateOf(Tool.BRUSH)
         private set
 
+    // -----------------------------------------------------------------------
+    // Idioma
+    // -----------------------------------------------------------------------
+    /**
+     * El idioma con el que se dibuja todo. Arranca en el del sistema si es uno
+     * de los que hablamos, y solo se queda quieto cuando alguien elige a mano.
+     */
+    var language by mutableStateOf(AppLanguage.fromSystem())
+        private set
+
+    /** Elección explícita. A nulo se sigue al sistema. */
+    private var chosenLanguage: AppLanguage? = null
+
+    /** Los rótulos vigentes, para los avisos que nacen fuera de la pantalla. */
+    val txt: Strings get() = language.strings
+
+    fun changeLanguage(value: AppLanguage) {
+        chosenLanguage = value
+        language = value
+        scheduleSettingsSave()
+    }
+
+    /** Un mensaje del motor, ya traducido. Ver `translateEngineError`. */
+    private fun engineError(raw: String?): String? = translateEngineError(raw, txt)
+
     private val prefs = appContext.getSharedPreferences("uvpainter", Context.MODE_PRIVATE)
 
     // -----------------------------------------------------------------------
@@ -185,6 +224,7 @@ class PainterController(private val appContext: Context) {
             autoSaveMinutes = autoSaveMinutes,
             openProjectPath = currentProjectPath,
             showFps = showFps,
+            language = chosenLanguage?.code,
         )
         runCatching {
             prefs.edit().putString(KEY_SETTINGS, json.encodeToString(settings)).apply()
@@ -226,6 +266,8 @@ class PainterController(private val appContext: Context) {
         // el autoguardado lo resucitaría sin que nadie lo haya pedido.
         currentProjectPath = saved.openProjectPath?.takeIf { File(it).isFile }
         showFps = saved.showFps
+        chosenLanguage = AppLanguage.fromCode(saved.language)
+        language = chosenLanguage ?: AppLanguage.fromSystem()
         if (showFps) renderThread.onFps = { measured -> postToUi { fps = measured } }
     }
 
@@ -278,7 +320,10 @@ class PainterController(private val appContext: Context) {
                     restored = true
                     info = readMeshInfo(NativeBridge.nativeGetModelName(handle))
                 } else {
-                    postToUi { statusMessage = "No se pudo recuperar la sesión: $error" }
+                    postToUi {
+                        statusMessage = txt.status.sessionRestoreFailed
+                            .format(engineError(error))
+                    }
                 }
             }
 
@@ -294,7 +339,7 @@ class PainterController(private val appContext: Context) {
                     if (error == null) {
                         info = readMeshInfo(name)
                     } else {
-                        postToUi { statusMessage = error }
+                        postToUi { statusMessage = engineError(error) }
                     }
                 }
             }
@@ -308,10 +353,10 @@ class PainterController(private val appContext: Context) {
                 info?.let { loaded -> meshInfo = loaded }
                 applyOrientationSnapshot(orientation)
                 hasBoundary = boundary
-                if (restored) statusMessage = "Sesión recuperada"
+                if (restored) statusMessage = txt.status.sessionRestored
                 // Si el documento no se pudo crear, decirlo: en silencio parece
                 // que la app funciona pero el pincel no hace nada.
-                if (!created) statusMessage = "No se pudo crear el documento de pintura"
+                if (!created) statusMessage = txt.status.documentFailed
                 if (showFps) renderThread.setContinuousRendering(true)
             }
         }
@@ -364,7 +409,7 @@ class PainterController(private val appContext: Context) {
     fun saveProjectAs(rawName: String) {
         val name = sanitizeName(rawName)
         if (name.isEmpty()) {
-            statusMessage = "Ponle un nombre al proyecto"
+            statusMessage = txt.status.nameYourProject
             return
         }
         busy = true
@@ -374,7 +419,7 @@ class PainterController(private val appContext: Context) {
             val error = NativeBridge.nativeSaveProject(handle, target.absolutePath)
             postToUi {
                 busy = false
-                statusMessage = error ?: "Proyecto guardado: $name"
+                statusMessage = engineError(error) ?: txt.status.projectSaved.format(name)
                 // Guardar con nombre pasa a ser el proyecto abierto: a partir de
                 // aquí el autoguardado escribe ahí y no solo en la sesión.
                 if (error == null) setCurrentProject(target.absolutePath)
@@ -391,7 +436,7 @@ class PainterController(private val appContext: Context) {
             if (error != null) {
                 postToUi {
                     busy = false
-                    statusMessage = error
+                    statusMessage = engineError(error)
                 }
                 return@post
             }
@@ -406,7 +451,7 @@ class PainterController(private val appContext: Context) {
                 applyOrientationSnapshot(orientation)
                 hasBoundary = boundary
                 setCurrentProject(path)
-                statusMessage = "Proyecto abierto: ${File(path).nameWithoutExtension}"
+                statusMessage = txt.status.projectOpened.format(File(path).nameWithoutExtension)
             }
         }
     }
@@ -416,7 +461,7 @@ class PainterController(private val appContext: Context) {
         // Si era el abierto, dejar de apuntarlo: el autoguardado lo recrearía.
         if (currentProjectPath == path) setCurrentProject(null)
         refreshProjects()
-        statusMessage = "Proyecto borrado"
+        statusMessage = txt.status.projectDeleted
     }
 
     private fun setCurrentProject(path: String?) {
@@ -443,6 +488,10 @@ class PainterController(private val appContext: Context) {
     /** Marca que hay pintura sin guardar. Lo pone todo lo que toca las capas. */
     @Volatile
     private var documentDirty = false
+
+    /** Cuándo se cerró el último trazo, para no guardar encima de la mano. */
+    @Volatile
+    private var lastStrokeMs = 0L
 
     // -----------------------------------------------------------------------
     // Autoguardado
@@ -494,23 +543,86 @@ class PainterController(private val appContext: Context) {
     }
 
     private fun runAutoSave() {
+        // Con el lápiz en el aire no: el punto de control lee el atlas entero y
+        // lo comprime, todo en el hilo de render, así que cae a mitad de trazo
+        // como un parón seco de varios segundos. Se aplaza hasta que haya un
+        // respiro, que es cuando no cuesta nada.
+        if (System.currentTimeMillis() - lastStrokeMs < QUIET_BEFORE_AUTOSAVE_MS) {
+            uiHandler.removeCallbacks(autoSaveRunnable)
+            uiHandler.postDelayed(autoSaveRunnable, QUIET_BEFORE_AUTOSAVE_MS)
+            return
+        }
         // Sin cambios desde el último guardado no hay nada que escribir, y leer
         // el atlas entero para volver a guardar lo mismo cuesta casi un segundo.
-        if (surfaceReady && documentDirty) {
-            val project = currentProjectPath
-            renderThread.post {
-                val error = writeCheckpoint(project)
-                postToUi {
-                    if (error == null) {
+        if (surfaceReady && documentDirty) startCheckpoint()
+        scheduleAutoSave()
+    }
+
+    /**
+     * Arranca un punto de control silencioso.
+     *
+     * El motor lee el atlas a plazos (una capa por fotograma, sin que nadie
+     * espere a la GPU) y comprime y escribe en hilos de fondo. Aquí solo se le
+     * va preguntando cómo va, pidiendo un fotograma en cada vuelta para que el
+     * reparto avance también cuando la app está quieta. Tarda más que guardar de
+     * una pieza, y esa es justamente la idea.
+     */
+    @Volatile
+    private var checkpointRunning = false
+
+    private fun startCheckpoint() {
+        if (checkpointRunning) return
+        checkpointRunning = true
+        val project = currentProjectPath
+        val target = project ?: sessionFile.absolutePath
+        renderThread.post {
+            if (!NativeBridge.nativeBeginCheckpoint(handle, target)) {
+                checkpointRunning = false
+                return@post
+            }
+            // Lo pintado hasta aquí ya está dentro del punto de control. Lo que
+            // venga después vuelve a ensuciar el documento y entrará en el
+            // siguiente: repetir un guardado no cuesta nada, perderlo sí.
+            documentDirty = false
+            renderThread.requestRender()
+            uiHandler.postDelayed({ pollCheckpoint(project) }, CHECKPOINT_POLL_MS)
+        }
+    }
+
+    private fun pollCheckpoint(project: String?) {
+        renderThread.post {
+            when (NativeBridge.nativeCheckpointStatus(handle)) {
+                1 -> {
+                    // Que siga avanzando aunque no haya nadie dibujando.
+                    renderThread.requestRender()
+                    uiHandler.postDelayed({ pollCheckpoint(project) }, CHECKPOINT_POLL_MS)
+                }
+                2 -> {
+                    // Copiar el .uvp ya escrito a la sesión son un par de cientos
+                    // de KB, pero es disco: fuera del hilo de render también.
+                    if (project != null) {
+                        Thread {
+                            runCatching { File(project).copyTo(sessionFile, overwrite = true) }
+                        }.start()
+                    }
+                    checkpointRunning = false
+                    postToUi {
                         lastAutoSaveMs = System.currentTimeMillis()
                         if (project != null) refreshProjects()
-                    } else {
-                        statusMessage = "El autoguardado falló: $error"
+                    }
+                }
+                else -> {
+                    val error = NativeBridge.nativeCheckpointError(handle)
+                    checkpointRunning = false
+                    documentDirty = true
+                    postToUi {
+                        if (error != null) {
+                            statusMessage = txt.status.autoSaveFailed.format(engineError(error))
+                        }
                     }
                 }
             }
         }
-        scheduleAutoSave()
     }
 
     /** Empieza de cero con el modelo actual: capas nuevas y sin sesion guardada. */
@@ -528,7 +640,7 @@ class PainterController(private val appContext: Context) {
                 // Empezar de cero desengancha del proyecto anterior: si no, el
                 // autoguardado lo machacaría con el lienzo vacío.
                 setCurrentProject(null)
-                statusMessage = "Proyecto nuevo"
+                statusMessage = txt.status.newProject
             }
         }
     }
@@ -621,10 +733,9 @@ class PainterController(private val appContext: Context) {
      */
     fun changeTool(newTool: Tool, persist: Boolean = true) {
         tool = newTool
+        // Cambiar de modo ya reenvía el pincel, y hace falta: la figura activa y
+        // el regulador de trazo dependen de qué herramienta esté en la mano.
         changePaintMode(paintModeFor(newTool))
-        // La figura activa depende de la herramienta, así que hay que reenviar
-        // el pincel al cambiarla.
-        renderThread.post { pushBrush() }
         if (persist) scheduleSettingsSave()
     }
 
@@ -635,7 +746,7 @@ class PainterController(private val appContext: Context) {
             renderThread.requestRender()
             postToUi {
                 hasBoundary = false
-                statusMessage = "Límites borrados"
+                statusMessage = txt.status.boundsCleared
             }
         }
     }
@@ -670,6 +781,10 @@ class PainterController(private val appContext: Context) {
         paintMode = mode
         renderThread.post {
             NativeBridge.nativeSetPaintMode(handle, mode.nativeValue)
+            // El pincel se reenvia porque el regulador de trazo depende del modo:
+            // borrando no hay cuerda, tambien cuando el borrador es el momentaneo
+            // del boton del lapiz y la herramienta sigue siendo el pincel.
+            pushBrush()
             renderThread.requestRender()
         }
     }
@@ -760,7 +875,11 @@ class PainterController(private val appContext: Context) {
         values[NativeBridge.B_GREEN] = brush.color.green
         values[NativeBridge.B_BLUE] = brush.color.blue
         values[NativeBridge.B_SMOOTHING] = brush.smoothing
-        values[NativeBridge.B_STABILIZER] = brush.stabilizerRadiusPx
+        // La cuerda solo se envia con el pincel puesto y pintando. Guardada
+        // seguia estando, y por eso el regulador se quedaba actuando sobre la
+        // goma de borrar: se encendia con el pincel, se cambiaba de herramienta
+        // y el motor seguia recibiendo la misma longitud.
+        values[NativeBridge.B_STABILIZER] = if (stabilizerActive) brush.stabilizerRadiusPx else 0f
         values[NativeBridge.B_PRESSURE_GAIN] = brush.pressureGain
         values[NativeBridge.B_PRESSURE_CURVE] = brush.pressureCurve
         values[NativeBridge.B_SIZE_FLOOR] = brush.pressureSizeFloor
@@ -822,7 +941,10 @@ class PainterController(private val appContext: Context) {
     // Capas
     // -----------------------------------------------------------------------
     fun addLayer() = onRenderThreadWithRefresh {
-        NativeBridge.nativeAddLayer(handle, "Capa ${NativeBridge.nativeLayerCount(handle) + 1}")
+        NativeBridge.nativeAddLayer(
+            handle,
+            txt.layers.numbered.format(NativeBridge.nativeLayerCount(handle) + 1),
+        )
     }
 
     fun removeLayer(index: Int) = onRenderThreadWithRefresh {
@@ -865,15 +987,69 @@ class PainterController(private val appContext: Context) {
     fun redo() = onRenderThreadWithRefresh { NativeBridge.nativeRedo(handle) }
 
     /**
-     * Se llama al terminar cada trazo. Aprovecha para refrescar también las
-     * miniaturas: es el momento en que el contenido de la capa cambió.
+     * Se llama al terminar cada trazo.
+     *
+     * Aquí antes se refrescaban también las miniaturas de TODAS las capas, y
+     * salía carísimo: cada miniatura es un `glReadPixels`, y un `glReadPixels`
+     * obliga al hilo de render a esperar a que la GPU termine todo lo que tenía
+     * encolado (la composición del atlas, la escena, el trazo). Con cinco capas
+     * eran cinco esperas completas por cada trazo, y haciendo detalle fino se
+     * dan varios trazos por segundo: de ahí los parones secos en los que la app
+     * deja de pintar y luego suelta de golpe todo lo que el lápiz había
+     * dibujado mientras tanto (los puntos no se pierden, esperan en la cola del
+     * motor). Lo único que hace falta al cerrar un trazo es saber si ya se puede
+     * deshacer, y eso no toca la GPU.
      */
     fun refreshHistory() {
         documentDirty = true
+        lastStrokeMs = System.currentTimeMillis()
         renderThread.post {
-            refreshLayersOnRenderThread()
+            val history = NativeBridge.nativeHistoryState(handle)
             val has = NativeBridge.nativeHasBoundary(handle)
-            postToUi { hasBoundary = has }
+            postToUi {
+                canUndo = history[0] == 1
+                canRedo = history[1] == 1
+                historyMemoryMb = history[2]
+                hasBoundary = has
+            }
+        }
+        // Las miniaturas se ponen al día solo si hay alguien mirándolas, y con
+        // retraso: mientras se dibuja se encadenan trazos y no tiene sentido
+        // rehacerlas en cada uno.
+        if (layersPanelOpen) scheduleThumbnailRefresh()
+    }
+
+    // -----------------------------------------------------------------------
+    // Miniaturas de capa
+    //
+    // Son lo más caro que tiene la interfaz y lo menos urgente: solo se ven con
+    // el panel de capas abierto, así que solo se leen entonces.
+    // -----------------------------------------------------------------------
+    var layersPanelOpen by mutableStateOf(false)
+        private set
+
+    fun setLayersPanelVisible(open: Boolean) {
+        if (open == layersPanelOpen) return
+        layersPanelOpen = open
+        uiHandler.removeCallbacks(thumbnailRunnable)
+        // Al abrirlo se refresca ya: las miniaturas pueden llevar rato viejas.
+        if (open) refreshLayers()
+    }
+
+    private val thumbnailRunnable = Runnable {
+        if (layersPanelOpen) refreshLayers()
+    }
+
+    private fun scheduleThumbnailRefresh() {
+        uiHandler.removeCallbacks(thumbnailRunnable)
+        uiHandler.postDelayed(thumbnailRunnable, 700)
+    }
+
+    /** Vuelve a leer la lista de capas del motor, miniaturas incluidas. */
+    fun refreshLayers() {
+        renderThread.post {
+            refreshLayersOnRenderThread(withThumbnails = true)
+            renderThread.requestRender()
         }
     }
 
@@ -888,7 +1064,7 @@ class PainterController(private val appContext: Context) {
             if (bytes == null) {
                 postToUi {
                     busy = false
-                    statusMessage = "No se pudo leer el archivo"
+                    statusMessage = txt.errors.fileUnreadable
                 }
                 return@post
             }
@@ -896,7 +1072,7 @@ class PainterController(private val appContext: Context) {
             if (error != null) {
                 postToUi {
                     busy = false
-                    statusMessage = error
+                    statusMessage = engineError(error)
                 }
                 return@post
             }
@@ -909,7 +1085,7 @@ class PainterController(private val appContext: Context) {
                 busy = false
                 meshInfo = info
                 applyOrientationSnapshot(orientation)
-                statusMessage = "Modelo cargado: ${info.triangles} triángulos"
+                statusMessage = txt.status.modelLoaded.format(info.triangles)
             }
         }
     }
@@ -924,7 +1100,7 @@ class PainterController(private val appContext: Context) {
             postToUi {
                 documentResolution = resolution
                 busy = false
-                statusMessage = "Documento a ${resolution}px (capas reiniciadas)"
+                statusMessage = txt.status.documentResized.format(resolution)
             }
         }
     }
@@ -937,17 +1113,17 @@ class PainterController(private val appContext: Context) {
             postToUi {
                 busy = false
                 statusMessage = if (pixels == null) {
-                    "No hay nada que exportar"
+                    txt.status.nothingToExport
                 } else {
                     val fileName = buildString {
-                        append(meshInfo.name.substringBeforeLast('.').ifBlank { "textura" })
+                        append(meshInfo.name.substringBeforeLast('.').ifBlank { txt.status.textureFileName })
                         append("_baseColor_")
                         append(System.currentTimeMillis() / 1000)
                         append(".png")
                     }
                     TextureIo.savePng(appContext, pixels, size, fileName)
-                        ?.let { "Guardado en Descargas: $it" }
-                        ?: "No se pudo guardar el PNG"
+                        ?.let { txt.status.savedToDownloads.format(it) }
+                        ?: txt.status.pngFailed
                 }
             }
         }
@@ -964,7 +1140,7 @@ class PainterController(private val appContext: Context) {
             NativeBridge.nativeDrawFrame(handle)
             postToUi {
                 busy = false
-                statusMessage = if (ok) "Imagen importada en la capa activa" else "No se pudo importar la imagen"
+                statusMessage = if (ok) txt.status.imageImported else txt.status.imageImportFailed
             }
         }
     }
@@ -995,8 +1171,14 @@ class PainterController(private val appContext: Context) {
         }
     }
 
-    /** Debe ejecutarse en el hilo de render: consulta el estado nativo. */
-    private fun refreshLayersOnRenderThread() {
+    /**
+     * Debe ejecutarse en el hilo de render: consulta el estado nativo.
+     *
+     * `withThumbnails` en false salta la única parte que espera a la GPU. Las
+     * miniaturas que ya había se conservan tal cual: mientras el panel de capas
+     * está cerrado nadie las mira, y la primera vez que se abre se leen enteras.
+     */
+    private fun refreshLayersOnRenderThread(withThumbnails: Boolean = layersPanelOpen) {
         val names = NativeBridge.nativeGetLayerNames(handle)
         val props = NativeBridge.nativeGetLayerProps(handle)
         val active = NativeBridge.nativeGetActiveLayer(handle)
@@ -1014,13 +1196,20 @@ class PainterController(private val appContext: Context) {
                 locked = props.getOrElse(base + 3) { 0f } > 0.5f,
                 alphaLock = props.getOrElse(base + 4) { 0f } > 0.5f,
                 clipToBelow = props.getOrElse(base + 5) { 0f } > 0.5f,
-                thumbnail = readThumbnail(index),
+                thumbnail = if (withThumbnails) readThumbnail(index) else null,
             )
         }
 
         postToUi {
+            val previous = layers.map { it.thumbnail }
             layers.clear()
-            layers.addAll(snapshot)
+            layers.addAll(
+                if (withThumbnails) {
+                    snapshot
+                } else {
+                    snapshot.map { it.copy(thumbnail = previous.getOrNull(it.index)) }
+                },
+            )
             activeLayer = active
             canUndo = history[0] == 1
             canRedo = history[1] == 1
@@ -1065,5 +1254,11 @@ class PainterController(private val appContext: Context) {
         const val KEY_SETTINGS = "ui_settings"
         const val THUMBNAIL_SIZE = 96
         const val EXT = ".uvp"
+
+        /** Silencio del lápiz que espera el autoguardado antes de ponerse. */
+        const val QUIET_BEFORE_AUTOSAVE_MS = 4_000L
+
+        /** Cada cuánto se le pregunta al punto de control cómo va. */
+        const val CHECKPOINT_POLL_MS = 80L
     }
 }

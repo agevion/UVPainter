@@ -376,7 +376,7 @@ bool loadGltfJson(const std::string& json, const std::vector<uint8_t>& binChunk,
                   std::string& error) {
     JsonValue root;
     if (!parseJson(json.c_str(), json.size(), root) || !root.isObject()) {
-        error = "El JSON del glTF esta mal formado";
+        error = "err.gltf_bad_json";
         return false;
     }
 
@@ -423,7 +423,7 @@ bool loadGltfJson(const std::string& json, const std::vector<uint8_t>& binChunk,
     }
 
     if (out.empty()) {
-        error = "El archivo no contiene ninguna malla triangulada";
+        error = "err.no_triangle_mesh";
         return false;
     }
 
@@ -434,7 +434,7 @@ bool loadGltfJson(const std::string& json, const std::vector<uint8_t>& binChunk,
 
 bool loadGlb(const uint8_t* data, size_t size, MeshData& out, std::string& error) {
     if (size < 12) {
-        error = "GLB truncado";
+        error = "err.glb_truncated";
         return false;
     }
     uint32_t magic = 0, version = 0, total = 0;
@@ -442,11 +442,11 @@ bool loadGlb(const uint8_t* data, size_t size, MeshData& out, std::string& error
     std::memcpy(&version, data + 4, 4);
     std::memcpy(&total, data + 8, 4);
     if (magic != 0x46546C67u) {  // "glTF"
-        error = "No es un archivo GLB";
+        error = "err.not_glb";
         return false;
     }
     if (version != 2) {
-        error = "Solo se admite glTF 2.0";
+        error = "err.gltf2_only";
         return false;
     }
 
@@ -471,7 +471,7 @@ bool loadGlb(const uint8_t* data, size_t size, MeshData& out, std::string& error
     }
 
     if (json.empty()) {
-        error = "El GLB no tiene chunk JSON";
+        error = "err.glb_no_json_chunk";
         return false;
     }
     return loadGltfJson(json, bin, out, error);
@@ -622,7 +622,7 @@ bool loadObj(const uint8_t* data, size_t size, MeshData& out, std::string& error
     if (current.indexCount > 0) out.submeshes.push_back(current);
 
     if (out.empty()) {
-        error = "El OBJ no contiene caras";
+        error = "err.obj_no_faces";
         return false;
     }
 
@@ -637,7 +637,7 @@ bool loadModelFromMemory(const uint8_t* data, size_t size, const std::string& hi
                          MeshData& out, std::string& error) {
     out = MeshData{};
     if (data == nullptr || size < 8) {
-        error = "Archivo vacio o demasiado corto";
+        error = "err.file_too_short";
         return false;
     }
 
@@ -655,7 +655,7 @@ bool loadModelFromMemory(const uint8_t* data, size_t size, const std::string& hi
         return loadObj(data, size, out, error);
     }
 
-    error = "Formato no reconocido: ." + hintExt + " (admitidos: .glb, .gltf, .obj)";
+    error = "err.unknown_format|" + hintExt;
     return false;
 }
 

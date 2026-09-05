@@ -95,6 +95,21 @@ object NativeBridge {
     /** Devuelve null si todo fue bien, o el mensaje de error si no. */
     external fun nativeSaveProject(handle: Long, path: String): String?
     external fun nativeLoadProject(handle: Long, path: String): String?
+
+    /**
+     * Punto de control silencioso: reparte la lectura del atlas entre frames y
+     * deja la compresion y el archivo a hilos de fondo, asi que el hilo de
+     * render no espera por nada. Es lo que usa el autoguardado.
+     *
+     * Devuelve false si ya hay otro en marcha. Avanza solo mientras se dibujen
+     * frames, asi que hay que pedir dibujado mientras se consulta el estado.
+     */
+    external fun nativeBeginCheckpoint(handle: Long, path: String): Boolean
+
+    /** 0 parado, 1 en marcha, 2 terminado, 3 fallado. Leerlo consume el 2 y el 3. */
+    external fun nativeCheckpointStatus(handle: Long): Int
+
+    external fun nativeCheckpointError(handle: Long): String?
     /** Nombre del archivo de modelo cargado, o cadena vacia si no hay ninguno. */
     external fun nativeGetModelName(handle: Long): String
     /** [vertices, triangulos, submallas, tieneUV, uvFuera01, islasUV] */
@@ -141,6 +156,13 @@ object NativeBridge {
     external fun nativeStrokeEnd(handle: Long)
     external fun nativeStrokeCancel(handle: Long)
     external fun nativeCameraGesture(handle: Long, kind: Int, a: Float, b: Float)
+
+    /**
+     * Zoom dirigido al punto (x, y) de la pantalla, en pixeles del MotionEvent.
+     * Lo que hay bajo ese punto se queda quieto, como la rueda del raton en un
+     * escritorio. Hilo de UI.
+     */
+    external fun nativeCameraZoomAt(handle: Long, ratio: Float, x: Float, y: Float)
     external fun nativeHover(handle: Long, x: Float, y: Float, pressure: Float)
     external fun nativeHoverEnd(handle: Long)
 
