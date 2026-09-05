@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         /** Modelo de arranque para poder probar sin importar nada. */
-        const val DEFAULT_MODEL_ASSET = "models/Boar.glb"
+        const val DEFAULT_MODEL_ASSET = "models/WaterBottle.glb"
         const val EXTRA_FINGER_PAINT = "finger_paint"
     }
 }

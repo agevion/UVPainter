@@ -39,6 +39,9 @@ adb shell am start -n com.uvpainter/.MainActivity --ez finger_paint true
 
 Ese mismo ajuste está en el panel de Pincel como «El dedo también pinta».
 
+La app arranca con un modelo de ejemplo incluido (`WaterBottle.glb`) para poder
+probar sin importar nada. Ver [Créditos](#créditos).
+
 ---
 
 ## Cómo se usa
@@ -263,3 +266,14 @@ la saturación. A 0 la vista es exacta al píxel.
   recorte por rectángulo sucio que está en la hoja de ruta.
 
 Ver [DISENO.md](DISENO.md) para el plan completo.
+
+---
+
+## Créditos
+
+El modelo de ejemplo que trae la app, `app/src/main/assets/models/WaterBottle.glb`,
+procede de los [glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
+de Khronos: *WaterBottle*, © 2017 Microsoft, publicado bajo
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) (dominio
+público). Se ha modificado para quitarle las texturas incrustadas, que la app no
+usa porque pinta las suyas: de 8,6 MB a 147 KB, conservando geometría y UVs.
