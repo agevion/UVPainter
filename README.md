@@ -4,9 +4,21 @@ Pintura de texturas directamente sobre el modelo 3D, para Android, pensada para
 tablet con lápiz. Desarrollada y probada en una **Galaxy Tab S7 (SM-T870)** con
 S-Pen.
 
+[![CI](https://github.com/agevion/UVPainter/actions/workflows/ci.yml/badge.svg)](https://github.com/agevion/UVPainter/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)
+
 Estado actual: **vertical slice funcionando en dispositivo**. Carga un modelo,
 lo orbitas con los dedos, pintas con el S-Pen sobre la superficie con oclusión
 correcta, gestionas capas y exportas el PNG.
+
+<p align="center">
+  <img src="docs/screenshots/01_pintando.png" width="49%" alt="Trazos pintados sobre el modelo 3D">
+  <img src="docs/screenshots/02_capas.png" width="49%" alt="Panel de capas">
+  <img src="docs/screenshots/03_pincel.png" width="49%" alt="Ajustes del pincel">
+  <img src="docs/screenshots/04_lapiz.png" width="49%" alt="Lápiz y rechazo de palma">
+</p>
 
 ---
 
@@ -37,7 +49,19 @@ Para probar el trazo sin lápiz (pintar con el dedo), se puede arrancar así:
 adb shell am start -n com.uvpainter/.MainActivity --ez finger_paint true
 ```
 
-Ese mismo ajuste está en el panel de Pincel como «El dedo también pinta».
+Ese mismo ajuste está en el panel «Lápiz y rechazo de palma» como «El dedo también
+pinta».
+
+Sin tablet, se puede probar en un emulador x86_64 (mejor un perfil de tablet, con
+la GPU del host). El APK solo incluye arm64 por defecto, así que hay que pedir la
+otra arquitectura al compilar:
+
+```bash
+./gradlew :app:assembleDebug -Puvpainter.abis=x86_64
+```
+
+Las capturas de arriba están hechas así, pintando con eventos de lápiz simulados
+por `adb shell input stylus motionevent`.
 
 La app arranca con un modelo de ejemplo incluido (`WaterBottle.glb`) para poder
 probar sin importar nada. Ver [Créditos](#créditos).

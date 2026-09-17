@@ -19,8 +19,11 @@ android {
         versionName = "0.1.0"
 
         ndk {
-            // Solo arm64: es lo que lleva la Tab S7 y lo que exige Play.
-            abiFilters += listOf("arm64-v8a")
+            // arm64 por defecto: es lo que lleva la Tab S7 y lo que exige Play. Para
+            // un emulador x86_64: ./gradlew assembleDebug -Puvpainter.abis=x86_64
+            abiFilters += providers.gradleProperty("uvpainter.abis").orNull
+                ?.split(',')?.map { it.trim() }
+                ?: listOf("arm64-v8a")
         }
 
         externalNativeBuild {
